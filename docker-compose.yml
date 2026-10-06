@@ -1,0 +1,26 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: chainsignal-clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-chainsignal}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-chainsignal}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-chainsignal}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"   # HTTP interface (used by clickhouse-connect)
+      - "9000:9000"   # native TCP interface (clickhouse-client)
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  clickhouse-data:

@@ -1,0 +1,8 @@
+pandas>=2.2,<3
+numpy>=1.26,<3
+pyspark>=4.0,<4.1          # 4.x supports Java 17/21; 3.5 does not support Java 21
+scikit-learn>=1.5,<2
+requests>=2.32,<3
+clickhouse-connect>=0.8,<1
+python-dotenv>=1.0,<2
+pytest>=8,<9
