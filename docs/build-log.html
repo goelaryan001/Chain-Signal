@@ -1,0 +1,231 @@
+<title>ChainSignal Build Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single reading column; each log entry is a "block" stamped with its git commit hash, like a chain of blocks. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --fg: #151a22;
+  --muted: #5a6474;
+  --line: #d9dee6;
+  --accent: #1f5f8b;
+  --accent-soft: #e2eef6;
+  --ok: #1d7a4c;
+  --ok-soft: #e1f2e8;
+  --todo: #8a5a00;
+  --todo-soft: #faefd9;
+  --code-bg: #eceff3;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161b22; --fg: #e4e8ee; --muted: #98a2b2; --line: #2a313b;
+    --accent: #7fb6dc; --accent-soft: #17293a; --ok: #6fcf9a; --ok-soft: #14301f;
+    --todo: #e8b75a; --todo-soft: #33270f; --code-bg: #1d232c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161b22; --fg: #e4e8ee; --muted: #98a2b2; --line: #2a313b;
+  --accent: #7fb6dc; --accent-soft: #17293a; --ok: #6fcf9a; --ok-soft: #14301f;
+  --todo: #e8b75a; --todo-soft: #33270f; --code-bg: #1d232c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.65 var(--body); padding: 0 16px; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 48px 80px; display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 6vw, 2.9rem); font-weight: 800; font-stretch: 85%; letter-spacing: -0.01em; }
+h2 { font-size: 1.55rem; font-weight: 700; font-stretch: 90%; }
+h3 { font-size: 1.08rem; font-weight: 650; margin-top: 8px; }
+p, li { max-width: 65ch; }
+p { margin: 0; }
+a { color: var(--accent); }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; background: var(--code-bg); padding: 14px 16px; border-radius: 6px; overflow-x: auto; margin: 0; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.eyebrow { font: 500 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+header { display: grid; gap: 14px; }
+header .pitch { font-size: 1.08rem; color: var(--muted); }
+
+/* Phase tracker */
+.phases { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.phases li { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--surface); display: grid; gap: 4px; }
+.phases .n { font: 500 0.72rem var(--mono); color: var(--muted); }
+.phases .t { font-size: 0.92rem; font-weight: 500; line-height: 1.3; }
+.pill { justify-self: start; font: 500 0.7rem/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 7px; border-radius: 999px; }
+.pill.done { color: var(--ok); background: var(--ok-soft); }
+.pill.next { color: var(--todo); background: var(--todo-soft); }
+.pill.later { color: var(--muted); background: var(--code-bg); }
+.phases li.is-done { border-color: var(--ok); }
+
+/* Log entries */
+.entry { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 28px 24px; display: grid; gap: 18px; }
+.entry-head { display: grid; gap: 6px; }
+.stamp { display: flex; flex-wrap: wrap; gap: 6px 16px; font: 0.78rem var(--mono); color: var(--muted); }
+.stamp b { color: var(--fg); font-weight: 500; }
+.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; display: grid; gap: 22px; }
+.steps > li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 0 12px; }
+.steps > li::before { content: counter(s); font: 600 0.85rem/34px var(--mono); text-align: center; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.steps .body { display: grid; gap: 10px; min-width: 0; }
+.why { border-left: 2px solid var(--accent); padding-left: 12px; color: var(--muted); }
+.why strong { color: var(--fg); font-weight: 600; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+.table-wrap { overflow-x: auto; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 0.72rem var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+td:first-child { font-family: var(--mono); font-size: 0.82rem; white-space: nowrap; }
+.result { display: grid; gap: 4px; font: 0.82rem/1.5 var(--mono); background: var(--code-bg); border-radius: 6px; padding: 14px 16px; overflow-x: auto; }
+.result .ok { color: var(--ok); }
+.result .todo { color: var(--todo); }
+ul.tight { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.next-box { border: 1px dashed var(--todo); border-radius: 8px; padding: 22px 24px; display: grid; gap: 12px; background: var(--surface); }
+footer { font-size: 0.85rem; color: var(--muted); }
+@media (max-width: 480px) { .entry, .next-box { padding: 20px 16px; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Build log · started 6 Oct 2026</span>
+    <h1>ChainSignal Build Log</h1>
+    <p class="pitch">A batch pipeline that pulls broad crypto market data (CoinGecko) and deep on-chain transaction data (Etherscan), stores it in ClickHouse, engineers features with PySpark, and compares three anomaly detectors with a real evaluation method. This log records every step, why it was taken, and what it produced.</p>
+  </header>
+
+  <section aria-labelledby="progress">
+    <h2 id="progress" class="eyebrow" style="font-family:var(--mono);font-size:.75rem;margin-bottom:12px">Progress</h2>
+    <ol class="phases">
+      <li class="is-done"><span class="n">Phase 0</span><span class="t">Environment</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill next">next</span></li>
+      <li><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill later">later</span></li>
+    </ol>
+  </section>
+
+  <article class="entry" id="phase-0">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 0 · 6 Oct 2026</span>
+      <h2>Environment: ClickHouse, Python, Spark</h2>
+      <div class="stamp"><span>branch <b>phase-0-environment</b></span><span>commits <b>e957eb4</b> → <b>3a5ec64</b> → <b>5c6239c</b></span><span>tests <b>3 passing</b></span></div>
+    </div>
+    <p>Goal: have every tool the later phases need installed and proven working before writing any pipeline logic. If ClickHouse or Spark were broken we would find out now, not halfway through feature engineering.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Checked the machine</h3>
+        <p>Found Docker 29.7 (installed but not running, so we launched Docker Desktop), Python 3.8 as the default, Python 3.11 and 3.12 available, and Java 21.</p>
+        <p class="why"><strong>Why it mattered:</strong> Spark runs on the Java Virtual Machine. Spark 3.5 only officially supports Java 8, 11 and 17. Spark 4.0 supports Java 17 and 21. Since this machine has Java 21, we chose <b>PySpark 4.0</b> instead of installing a second Java. Python 3.8 is too old for current pandas and PySpark 4, so the project uses 3.11.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Committed the design doc and made a working branch</h3>
+        <p>The design plan went in as its own commit (<code>e957eb4</code>) so the starting spec is preserved in history. All Phase 0 work happens on <code>phase-0-environment</code>, which keeps <code>main</code> clean until you merge.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Ran ClickHouse in Docker</h3>
+        <p><code>docker-compose.yml</code> defines one container from the official <code>clickhouse/clickhouse-server:25.8</code> image.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>port 8123</td><td>HTTP interface. Our Python client (<code>clickhouse-connect</code>) talks over this.</td></tr>
+            <tr><td>port 9000</td><td>Native TCP interface, for the <code>clickhouse-client</code> command line tool if you want to poke around.</td></tr>
+            <tr><td>user / db</td><td>Creates user <code>chainsignal</code> and database <code>chainsignal</code> on first start, instead of using the default passwordless user.</td></tr>
+            <tr><td>named volume</td><td><code>clickhouse-data</code> keeps the data when the container stops or is recreated. <code>docker compose down -v</code> wipes it.</td></tr>
+            <tr><td>ulimits nofile</td><td>ClickHouse opens many files at once (one per column per data part). The official image recommends raising the open-file limit.</td></tr>
+            <tr><td>healthcheck</td><td>Pings <code>/ping</code> every 5 s so <code>docker compose ps</code> shows "healthy" only once it actually accepts queries.</td></tr>
+          </tbody>
+        </table></div>
+        <p class="why"><strong>Why ClickHouse:</strong> it is a columnar database built for fast aggregations over large append-only data. Our access pattern is exactly that: load big batches of prices and transactions once, then run many "average / std / count over a window per coin" queries. Columnar storage reads only the columns a query touches and compresses repeated values well.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Created the Python environment</h3>
+        <p>A virtualenv in <code>.venv</code> (Python 3.11) with these packages:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Package</th><th>Installed</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td>pyspark</td><td>4.0.4</td><td>Phase 3 feature engineering at scale</td></tr>
+            <tr><td>pandas</td><td>2.3.3</td><td>Small-scale data handling and inspection</td></tr>
+            <tr><td>numpy</td><td>2.4.6</td><td>Numeric arrays under pandas and scikit-learn</td></tr>
+            <tr><td>scikit-learn</td><td>1.9.1</td><td>Isolation Forest and LOF in Phase 4</td></tr>
+            <tr><td>requests</td><td>2.34.2</td><td>Calling the CoinGecko and Etherscan APIs</td></tr>
+            <tr><td>clickhouse-connect</td><td>0.15.1</td><td>Python client for ClickHouse (added beyond the plan's list; needed to talk to the database)</td></tr>
+            <tr><td>python-dotenv</td><td>1.2.4</td><td>Loads API keys from <code>.env</code></td></tr>
+            <tr><td>pytest</td><td>8.4.2</td><td>Tests</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>pyproject.toml</code> makes the code an installable package (<code>pip install -e .</code>), so <code>import chainsignal</code> works from scripts and tests without path tricks.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Wrote the project skeleton and three small helpers</h3>
+        <pre><code>src/chainsignal/
+  config.py        reads settings from .env into one Settings object
+  spark.py         get_spark(): local SparkSession, UTC time zone
+  db/clickhouse.py get_client(): ClickHouse connection from settings
+  ingest/  features/  models/  evaluation/   (empty, filled in later phases)
+scripts/check_env.py
+tests/test_environment.py</code></pre>
+        <p class="why"><strong>Why helpers now:</strong> every later phase needs a database connection and a Spark session. Putting the connection details in one place means changing a host or password is a one-line edit in <code>.env</code>. Spark's time zone is pinned to UTC because crypto trades around the clock and both APIs return UTC timestamps; a local time zone would silently shift daily buckets.</p>
+        <p>Secrets: <code>.env</code> holds real API keys and is git-ignored. <code>.env.example</code> is committed as the template. <code>data/</code> is also ignored because raw pulls can be re-fetched.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Verified everything actually works</h3>
+        <p><code>scripts/check_env.py</code> runs a real query against ClickHouse, runs a real Spark job, and reports which API keys are set. Output:</p>
+        <div class="result">
+          <span class="ok">[ok]   ClickHouse 25.8.33.6 reachable, database 'chainsignal'</span>
+          <span class="ok">[ok]   Spark 4.0.4 ran a local job (sum 0..999999 = 499999500000)</span>
+          <span class="todo">[todo] COINGECKO_API_KEY not set yet (needed in Phase 1)</span>
+          <span class="todo">[todo] ETHERSCAN_API_KEY not set yet (needed in Phase 1)</span>
+        </div>
+        <p>The pytest suite has 3 tests: settings defaults match <code>docker-compose.yml</code>, a ClickHouse round trip (<code>SELECT 1 + 1</code>), and a Spark job. Tests that need running services are marked <code>integration</code>. All 3 pass.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Committed</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Commit</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td>e957eb4</td><td>Design and build plan</td></tr>
+            <tr><td>3a5ec64</td><td>docker-compose, requirements, pyproject, .gitignore, .env.example</td></tr>
+            <tr><td>5c6239c</td><td>Package skeleton, helpers, check script, tests</td></tr>
+            <tr><td>next</td><td>README setup instructions and this build log</td></tr>
+          </tbody>
+        </table></div>
+      </div></li>
+    </ol>
+
+    <h3>Bugs and surprises</h3>
+    <ul class="tight">
+      <li>Docker Desktop was not running. We launched it and it was up within a few seconds. No code change.</li>
+      <li>Java 21 rules out Spark 3.5, so we chose PySpark 4.0. Recorded in the comment in <code>requirements.txt</code>.</li>
+      <li>No code bugs in this phase.</li>
+    </ul>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li>Why ClickHouse over DuckDB or TimescaleDB? A columnar server database built for fast aggregations over huge append-only data, used in production by crypto and fintech teams for this workload.</li>
+      <li>Why Docker? Anyone can reproduce the database with one command, at the same version.</li>
+      <li>Why a check script before any logic? It proves the foundation works, so later failures point at new code rather than setup.</li>
+    </ul>
+  </article>
+
+  <section class="next-box" aria-labelledby="next">
+    <span class="eyebrow">Before the next session</span>
+    <h2 id="next">Phase 1 needs two free API keys</h2>
+    <ul class="tight">
+      <li><b>CoinGecko Demo key</b> from coingecko.com/en/api/pricing (the free Demo plan).</li>
+      <li><b>Etherscan key</b> from etherscan.io/myapikey (free account).</li>
+      <li>Paste both into <code>.env</code> in the project folder, then run <code>.venv/bin/python scripts/check_env.py</code>. Both lines should turn <code>[ok]</code>.</li>
+    </ul>
+    <p>Phase 1 then pulls about 500 to 1,000 coins of daily history from CoinGecko within its 100 calls per minute limit, and the full transaction history of 2 or 3 tokens from Etherscan, paging around its 1,000 records per request limit. We print real samples from both before building anything on top.</p>
+  </section>
+
+  <footer>Repo: Chain-Signal · Source of this page: <code>docs/build-log.html</code></footer>
+</div>
