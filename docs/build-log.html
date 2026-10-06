@@ -217,14 +217,15 @@ tests/test_environment.py</code></pre>
   </article>
 
   <section class="next-box" aria-labelledby="next">
-    <span class="eyebrow">Before the next session</span>
-    <h2 id="next">Phase 1 needs two free API keys</h2>
-    <ul class="tight">
-      <li><b>CoinGecko Demo key</b> from coingecko.com/en/api/pricing (the free Demo plan).</li>
-      <li><b>Etherscan key</b> from etherscan.io/myapikey (free account).</li>
-      <li>Paste both into <code>.env</code> in the project folder, then run <code>.venv/bin/python scripts/check_env.py</code>. Both lines should turn <code>[ok]</code>.</li>
-    </ul>
-    <p>Phase 1 then pulls about 500 to 1,000 coins of daily history from CoinGecko within its 100 calls per minute limit, and the full transaction history of 2 or 3 tokens from Etherscan, paging around its 1,000 records per request limit. We print real samples from both before building anything on top.</p>
+    <span class="eyebrow">Update · 6 Oct 2026</span>
+    <h2 id="next">API keys added and verified</h2>
+    <p>Both keys are in <code>.env</code> (git-ignored, never committed). Being present in the file does not prove a key works, so we made one cheap live call to each API:</p>
+    <div class="result">
+      <span class="ok">CoinGecko  GET /api/v3/ping                         → 200 "(V3) To the Moon!"</span>
+      <span class="ok">Etherscan  GET /v2/api?module=proxy&amp;action=eth_blockNumber → 200, latest block 26,134,800</span>
+    </div>
+    <p>The Etherscan call uses the <b>V2</b> API (<code>/v2/api</code> with <code>chainid=1</code> for Ethereum mainnet). V1 endpoints are deprecated, so all Phase 1 ingestion will use V2.</p>
+    <p>Next is Phase 1: pull about 500 to 1,000 coins of daily history from CoinGecko within its 100 calls per minute limit, and the full transaction history of 2 or 3 tokens from Etherscan, paging around its 1,000 records per request limit. We print real samples from both before building anything on top.</p>
   </section>
 
   <footer>Repo: Chain-Signal · Source of this page: <code>docs/build-log.html</code></footer>
