@@ -1,6 +1,8 @@
 """Tests for the pure ingestion logic (no network)."""
 from chainsignal.ingest.coingecko import MS_PER_DAY, parse_market_chart
-from chainsignal.ingest.etherscan import iter_complete_blocks, number_within_tx, parse_transfer
+import gzip
+
+from chainsignal.ingest.etherscan import iter_complete_blocks, number_within_tx, parse_transfer, trim_to_checkpoint
 
 
 # ---------- CoinGecko ----------
@@ -112,3 +114,13 @@ def test_parse_transfer_scales_by_decimals_and_normalises():
 def test_number_within_tx_gives_unique_keys_for_multi_transfer_txs():
     recs = [{"hash": "0xa"}, {"hash": "0xa"}, {"hash": "0xb"}, {"hash": "0xa"}]
     assert [r["txSeq"] for r in number_within_tx(recs)] == [0, 1, 0, 2]
+
+
+def test_trim_to_checkpoint_removes_rows_written_after_last_save(tmp_path):
+    path = tmp_path / "t.jsonl.gz"
+    with gzip.open(path, "wt") as f:
+        f.writelines(f"{i}\n" for i in range(10))
+    assert trim_to_checkpoint(path, 7) == 3
+    with gzip.open(path, "rt") as f:
+        assert f.read().split() == [str(i) for i in range(7)]
+    assert trim_to_checkpoint(path, 7) == 0

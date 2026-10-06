@@ -145,6 +145,22 @@ def parse_transfer(record: dict) -> dict:
     }
 
 
+def trim_to_checkpoint(data_path: Path, rows: int) -> int:
+    """Drop lines written after the last saved checkpoint (a crash between append and state save).
+
+    Returns the number of lines removed.
+    """
+    if not data_path.exists():
+        return 0
+    with gzip.open(data_path, "rt") as f:
+        lines = f.readlines()
+    extra = len(lines) - rows
+    if extra > 0:
+        with gzip.open(data_path, "wt") as f:
+            f.writelines(lines[:rows])
+    return max(extra, 0)
+
+
 def pull_token_transfers(
     client: EtherscanClient, symbol: str, contract: str, start_block: int, end_block: int, raw_dir: Path,
 ) -> dict:
@@ -156,6 +172,7 @@ def pull_token_transfers(
 
     if state_path.exists():
         state = json.loads(state_path.read_text())
+        trim_to_checkpoint(data_path, state["rows"])
     else:
         state = {"symbol": symbol, "contract": contract, "start_block": start_block,
                  "end_block": end_block, "next_block": start_block, "rows": 0, "calls": 0}
