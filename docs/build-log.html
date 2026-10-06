@@ -97,8 +97,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
     <h2 id="progress" class="eyebrow" style="font-family:var(--mono);font-size:.75rem;margin-bottom:12px">Progress</h2>
     <ol class="phases">
       <li class="is-done"><span class="n">Phase 0</span><span class="t">Environment</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill later">later</span></li>
@@ -216,9 +216,9 @@ tests/test_environment.py</code></pre>
     </ul>
   </article>
 
-  <section class="next-box" aria-labelledby="next">
-    <span class="eyebrow">Update · 6 Oct 2026</span>
-    <h2 id="next">API keys added and verified</h2>
+  <section class="entry" aria-labelledby="keys">
+    <span class="eyebrow">Phase 0 follow-up · 6 Oct 2026</span>
+    <h2 id="keys">API keys added and verified</h2>
     <p>Both keys are in <code>.env</code> (git-ignored, never committed). Being present in the file does not prove a key works, so we made one cheap live call to each API:</p>
     <div class="result">
       <span class="ok">CoinGecko  GET /api/v3/ping                         → 200 "(V3) To the Moon!"</span>
@@ -226,6 +226,166 @@ tests/test_environment.py</code></pre>
     </div>
     <p>The Etherscan call uses the <b>V2</b> API (<code>/v2/api</code> with <code>chainid=1</code> for Ethereum mainnet). V1 endpoints are deprecated, so all Phase 1 ingestion will use V2.</p>
     <p>Next is Phase 1: pull about 500 to 1,000 coins of daily history from CoinGecko within its 100 calls per minute limit, and the full transaction history of 2 or 3 tokens from Etherscan, paging around its 1,000 records per request limit. We print real samples from both before building anything on top.</p>
+  </section>
+
+  <article class="entry" id="phase-1">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 1 · 6 Oct 2026</span>
+      <h2>Real data ingestion: CoinGecko + Etherscan</h2>
+      <div class="stamp"><span>branch <b>phase-1-ingestion</b></span><span>commits <b>e7819d1</b> → <b>8197f9c</b></span><span>tests <b>13 unit passing</b></span><span>bugs fixed <b>4</b></span></div>
+    </div>
+    <p>Goal: pull real data from both sources, at the scale the design calls for, and look at it closely before building anything on top. Two very different shapes of data: <b>breadth</b> (1,000 coins, one row per coin per day) and <b>depth</b> (every single on-chain transfer of 3 tokens over 90 days).</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Confirmed the real API limits before writing code</h3>
+        <p>The design doc listed limits from memory. The ingestion design depends on them, so we checked both providers' current docs first.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>API</th><th>Limit</th><th>What it forced in the design</th></tr></thead>
+          <tbody>
+            <tr><td>CoinGecko Demo</td><td>100 calls/min</td><td>Pace calls at ~92/min to leave headroom.</td></tr>
+            <tr><td>CoinGecko Demo</td><td>10,000 calls/month</td><td>The real constraint: a 1,000-coin pull costs ~10% of the month. Every response is cached to disk and never fetched twice.</td></tr>
+            <tr><td>CoinGecko Demo</td><td>365 days of daily history</td><td>Our market window is exactly one year: 7 Oct 2025 to 6 Oct 2026.</td></tr>
+            <tr><td>Etherscan free</td><td>5 calls/sec, 100k/day</td><td>Pace at 4/sec (later 1.6/sec per parallel process).</td></tr>
+            <tr><td>Etherscan free</td><td>1,000 records per request (since 1 Jul 2026)</td><td>Pagination by block range, explained in step 4.</td></tr>
+          </tbody>
+        </table></div>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Chose the three on-chain tokens</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Token</th><th>Why it's in the set</th></tr></thead>
+          <tbody>
+            <tr><td>LINK</td><td>Steady large-cap. The "normal behaviour" baseline.</td></tr>
+            <tr><td>PEPE</td><td>High-volume memecoin. Bursty, volatile activity.</td></tr>
+            <tr><td>LOOKS</td><td>LooksRare. Has a well-documented wash-trading history, which gives the anomaly hunt a named, real target.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Contract addresses are looked up from CoinGecko's coin detail endpoint, not typed from memory, and saved in <code>data/raw/etherscan/contracts.json</code>. A wrong address would silently pull the wrong token's data.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Wrote the CoinGecko client</h3>
+        <p><code>ingest/coingecko.py</code>: 4 calls to <code>/coins/markets</code> fetch the top 1,000 coins by market cap (250 per page). Then one <code>/coins/{id}/market_chart</code> call per coin returns 365 days of price, market cap and volume. Each response is written to <code>data/raw/coingecko/market_chart/&lt;coin&gt;.json</code>, and coins already on disk are skipped. A crash halfway costs nothing.</p>
+        <p class="why"><strong>A subtle detail:</strong> CoinGecko's daily series has one point at 00:00 UTC per day, plus one extra point for "right now" in the middle of today. That last point is an incomplete day, so the parser keeps only exact-midnight points. Otherwise today would look like a day with strangely low volume.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Wrote the Etherscan client, with block-window pagination</h3>
+        <p><code>ingest/etherscan.py</code> pulls ERC-20 <code>Transfer</code> events (<code>tokentx</code>) for each token. The hard part is getting <i>every</i> record exactly once when each request returns at most 1,000.</p>
+        <p class="why"><strong>Why not page 1, 2, 3...?</strong> Etherscan refuses requests where page × page size goes past 10,000 records. PEPE has 600k transfers in our window, so page numbers stop working almost immediately.</p>
+        <p>Instead we walk forward by <b>block number</b>:</p>
+        <pre><code>ask:   transfers from block 1000 onward (max 1,000)
+got:   1,000 records, blocks 1000 ... 1042
+       block 1042 may be cut off part-way  →  drop it
+write: everything in blocks 1000–1041 (complete blocks only)
+next:  ask from block 1042 onward
+...
+got:   fewer than 1,000 records  →  reached the end, write all, done</code></pre>
+        <p>Because only complete blocks are ever written, there are <b>no duplicates and no gaps</b>, and the resume point is exact. After every batch a checkpoint (<code>state.json</code>) records the next block. A block holding more than 1,000 transfers of one token is paged on its own. The tests cover this case too.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Tested the logic without the network</h3>
+        <p>The pagination function takes a "fetch" function as input. So the tests feed it a fake in-memory blockchain and check that every record comes back exactly once, that no block is split, that an oversized block is handled, and that resuming after a crash gives the same result as one clean run. Parsing tests cover decimals (LINK has 18: <code>1500000000000000000</code> raw = 1.5 LINK), lowercase addresses and UTC timestamps.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Ran a small live trial before spending budget</h3>
+        <p>3 coins and 1 day of LOOKS, written to a scratch folder. CoinGecko looked right: Bitcoin returned exactly 365 rows. Etherscan <b>crashed</b>, which was the point of the trial. See Bug 2 below.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Ran the full pulls, and sped them up</h3>
+        <p>CoinGecko ran at 42 coins/min, not the planned 92. Each request takes ~1.4 s on the server, and requests go one at a time. Etherscan ran at ~30 calls/min, about 2 s per call. Waiting on the server, not the rate limit, was the bottleneck. So the three tokens were split into <b>three parallel processes</b> at 1.6 calls/sec each (4.8/sec total, under the 5/sec limit).</p>
+        <p>Two changes were needed first, because stopping and restarting a pull had to be safe:</p>
+        <ul class="tight">
+          <li><code>range.json</code> pins one block range (25,490,683 → 26,136,169, ~90 days) so all three tokens cover exactly the same window.</li>
+          <li>On resume, the data file is trimmed back to the checkpoint's row count. A kill landing between "write batch" and "save checkpoint" can no longer duplicate a batch.</li>
+        </ul>
+        <p>Midway, Etherscan slowed from ~2 s to ~9 s per call, and LINK and PEPE both crashed (Bug 3). After the fix, both resumed from their checkpoints with nothing lost. Then both reported "complete", yet their data stopped two days short of the end block (Bug 4). The inspection step caught it, and <code>--recheck</code> filled the gap: +19,023 LINK and +15,307 PEPE transfers.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Inspected the real data</h3>
+        <p><code>scripts/inspect_raw.py</code> loads everything and prints samples and sanity checks.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Dataset</th><th>Rows</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>CoinGecko</td><td>319,158</td><td>1,000 coins × up to 365 days, 0 failed fetches, ~1,010 of 10,000 monthly calls used. 291 coins listed within the year (shorter history). 0 null prices.</td></tr>
+            <tr><td>LINK</td><td>1,012,936</td><td>1,025 API calls · 180,074 unique addresses · median 10,146 transfers/day</td></tr>
+            <tr><td>PEPE</td><td>622,132</td><td>651 API calls · 168,172 unique addresses · median 5,536 transfers/day, peak 58,162 on 16 Jul</td></tr>
+            <tr><td>LOOKS</td><td>3,856</td><td>4 API calls · 1,132 unique addresses · median 28 transfers/day, peak 388 on 7 Sep</td></tr>
+          </tbody>
+        </table></div>
+        <p>Duplicate check on (tx_hash, tx_seq): <b>0 duplicates</b> for all three tokens. That's the pagination design proven on real data. Sanity check against reality on the latest day: BTC $85,771, ETH $2,710, USDT $1.00.</p>
+        <p>Early on-chain observations to follow up in Phase 3:</p>
+        <ul class="tight">
+          <li>LINK is busier on-chain than PEPE, even though PEPE is the "hype" token.</li>
+          <li>Many of PEPE's transfers come from <code>handleOps</code> (ERC-4337 smart-contract wallets) and from an oddly named unverified function, <code>atInversebrah</code>. Names like that are typical of MEV trading bots. That's automated activity, which matters when we ask what "normal" volume looks like.</li>
+          <li>LOOKS is nearly dormant: about 28 transfers a day, from just 1,132 addresses in 90 days. In such a thin market, a few wallets trading back and forth would stand out sharply.</li>
+        </ul>
+      </div></li>
+    </ol>
+
+    <h3>Finding: feed glitches that look exactly like anomalies</h3>
+    <p>The biggest "price moves" in the dataset aren't market events. They're data errors:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Pattern</th><th>Example</th><th>Cause</th></tr></thead>
+      <tbody>
+        <tr><td>Bad prints</td><td>pinksale trades ~$200 but some days show $0.0032, then snaps back. That shows up as a +71,848x "return".</td><td>A broken price feed on a thin market.</td></tr>
+        <tr><td>Unit switching</td><td>targon, templar, bitmind, affine, openkaito and others jump by ~130x, again and again.</td><td>Bittensor subnet tokens sometimes quoted in TAO instead of USD. 1 TAO ≈ $130.</td></tr>
+        <tr><td>Missing days</td><td>92 coins have gaps inside their history.</td><td>3,029 coin-days absent from the feed.</td></tr>
+      </tbody>
+    </table></div>
+    <p>37 of 1,000 coins have at least one >10x single-day jump. A naive detector would rank these as the most anomalous points in crypto. <b>Decision:</b> raw data stays untouched (it's the record of what the API said), and a data-quality cleaning step runs before any modelling. This becomes part of the Phase 2/3 design.</p>
+
+    <h3>Bugs and surprises</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Bug 1</td><td>The cached coin list ignored <code>--coins</code>. A 5-coin trial would have cached a 5-coin list, and the 1,000-coin run would have silently reused it. Caught while planning the trial.</td><td>Refetch the list when the cached one is shorter than requested. Part of <code>e7819d1</code>.</td></tr>
+        <tr><td>Bug 2</td><td>The trial crashed: Etherscan V2's <code>tokentx</code> has <b>no <code>logIndex</code></b> field (V1 had one). One transaction can contain several transfers of the same token, so the hash alone isn't a unique key.</td><td>Number transfers within each transaction (<code>tx_seq</code>) and key on (tx_hash, tx_seq). Also kept <code>functionName</code>. <code>285950d</code></td></tr>
+        <tr><td>Bug 3</td><td>LINK and PEPE crashed with "giving up after 5 attempts" during an Etherscan slowdown, and the error didn't say why.</td><td>Errors now record the last cause; Etherscan retries 10 times with backoff capped at 60 s. <code>df59c94</code></td></tr>
+        <tr><td>Bug 4</td><td>The pull <b>silently stopped ~2 days early</b>. LINK and PEPE said "complete", but their last transfers were on 4 Oct, while LOOKS (pulled before the slowdown) ran to 6 Oct. Asking Etherscan directly showed 1,000+ more transfers after our last block. A short or empty answer under load had been treated as "end of range". The crash in Bug 3 was loud; this one was silent, which is worse.</td><td>Never trust the last block of any multi-block batch; end only after two empty answers in a row; a post-pull <b>coverage check</b> compares the last stored transfer with the end block; <code>--recheck</code> resumes from the last stored block. Two new tests simulate a spurious empty answer and an answer cut mid-block. <code>8197f9c</code></td></tr>
+        <tr><td>Env</td><td>Docker Desktop hung on its previous shutdown, which corrupted the ClickHouse container record (<code>RWLayer ... unexpectedly nil</code>).</td><td>Removed and recreated the container. The data volume is separate and survived. No code change.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Commits</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Commit</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td>e7819d1</td><td>Ingestion clients, pagination, tracked tokens, 9 tests (includes Bug 1 fix)</td></tr>
+        <tr><td>285950d</td><td>Bug 2: key transfers by (tx_hash, tx_seq)</td></tr>
+        <tr><td>1ed2eb2</td><td>Fixed shared block range, resume-safe trim, parallel rate flag, inspection script</td></tr>
+        <tr><td>df59c94</td><td>Bug 3: retry hardening</td></tr>
+        <tr><td>e8d9ddc</td><td>Data-quality checks in the inspection script</td></tr>
+        <tr><td>8197f9c</td><td>Bug 4: early-stop fix, coverage check, <code>--recheck</code></td></tr>
+        <tr><td>next</td><td>This build log entry</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>How did you paginate around the 1,000-record cap?</b> By block range, not page number. Drop the possibly cut-off last block of every full batch and restart from it, so only complete blocks are written. No duplicates, no gaps, exact resume.</li>
+      <li><b>How did you protect the 10k/month CoinGecko budget?</b> Every response is cached to disk, and reruns skip what exists. A trial run went to a scratch folder first.</li>
+      <li><b>Why was it slow, and what did you do?</b> Measured it first: waiting on the server, not the rate limit. So we parallelised across tokens while staying under the limit, after making restarts safe.</li>
+      <li><b>How do you know the data is complete?</b> Two independent checks: zero duplicates on (tx_hash, tx_seq), and a coverage check that the last stored transfer reaches the end of the range. The second one caught a pull that had wrongly reported itself complete.</li>
+      <li><b>What surprised you in the data?</b> The largest "anomalies" were feed glitches (bad prints, TAO/USD unit switches). That's why data cleaning comes before anomaly detection.</li>
+    </ul>
+  </article>
+
+
+  <section class="next-box" aria-labelledby="next">
+    <span class="eyebrow">Next session</span>
+    <h2 id="next">Phase 2: ClickHouse schema and load</h2>
+    <ul class="tight">
+      <li>Design the raw tables: one for daily market data, one for on-chain transfers. Choose the ClickHouse table engine, sort key and partitioning for how we'll query (per coin over time, per token per day).</li>
+      <li>Load 319,158 market rows and 1,638,924 transfers, then check the row counts match the raw files exactly.</li>
+      <li>Plan the cleaning layer for the feed glitches found above, as a separate view or table, so raw data stays untouched.</li>
+    </ul>
   </section>
 
   <footer>Repo: Chain-Signal · Source of this page: <code>docs/build-log.html</code></footer>
