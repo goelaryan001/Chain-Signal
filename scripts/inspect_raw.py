@@ -41,6 +41,15 @@ def inspect_coingecko() -> None:
     df["ret"] = df.groupby("coin_id").price.pct_change()
     print(df.loc[df.ret.abs().nlargest(5).index, ["coin_id", "date", "price", "ret"]].to_string(index=False))
 
+    print("\ndata quality (raw data is kept as-is; these feed a cleaning step before modelling):")
+    spikes = df[df.ret > 9].groupby("coin_id").size().sort_values(ascending=False)
+    print(f"  coins with a >10x single-day jump: {len(spikes)} -> {spikes.head(8).to_dict()}")
+    span = df.groupby("coin_id").date.agg(["min", "max", "size"])
+    expected = (pd.to_datetime(span["max"]) - pd.to_datetime(span["min"])).dt.days + 1
+    gappy = (expected - span["size"])
+    print(f"  coins with missing days inside their range: {(gappy > 0).sum()} "
+          f"(total missing coin-days: {gappy.sum():,})")
+
 
 def inspect_etherscan() -> None:
     print("\n=== Etherscan ===")
