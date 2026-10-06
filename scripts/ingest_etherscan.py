@@ -14,7 +14,7 @@ import time
 
 from chainsignal.config import get_settings
 from chainsignal.ingest.coingecko import CoinGeckoClient
-from chainsignal.ingest.etherscan import EtherscanClient, pull_token_transfers
+from chainsignal.ingest.etherscan import EtherscanClient, last_stored_block, pull_token_transfers
 from chainsignal.ingest.tokens import TRACKED_TOKENS
 
 RAW_DIR = Path("data/raw/etherscan")
@@ -54,6 +54,8 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=90)
     parser.add_argument("--tokens", nargs="*", default=list(TRACKED_TOKENS))
     parser.add_argument("--rate", type=float, default=4.0, help="calls/sec for this process")
+    parser.add_argument("--recheck", action="store_true",
+                        help="resume from the last stored block, even if the state says complete")
     args = parser.parse_args()
 
     settings = get_settings()
@@ -65,9 +67,23 @@ def main() -> None:
     for symbol in args.tokens:
         info = contracts[symbol]
         print(f"{symbol} ({info['coin_id']}) contract {info['contract']}")
-        state = pull_token_transfers(es, symbol, info["contract"], start_block, end_block, RAW_DIR)
+        state = pull_token_transfers(es, symbol, info["contract"], start_block, end_block, RAW_DIR,
+                                     recheck=args.recheck)
         print(f"  {symbol}: {state['rows']:,} transfers, {state['calls']:,} API calls, "
               f"blocks {state['start_block']:,} -> {state['end_block']:,}")
+        check_coverage(es, symbol, state)
+
+
+def check_coverage(es: EtherscanClient, symbol: str, state: dict, max_gap_hours: float = 6) -> None:
+    """Warn when the last stored transfer is far older than the end of the range."""
+    last = last_stored_block(RAW_DIR / symbol / "transfers.jsonl.gz")
+    if last is None:
+        print(f"  WARNING {symbol}: no transfers stored")
+        return
+    gap_h = (es.block_time(state["end_block"]) - es.block_time(last)).total_seconds() / 3600
+    flag = "WARNING" if gap_h > max_gap_hours else "ok"
+    print(f"  coverage {flag}: last stored transfer is {gap_h:.1f}h before the end block"
+          + (" -> rerun with --recheck" if flag == "WARNING" else ""))
 
 
 if __name__ == "__main__":

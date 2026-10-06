@@ -11,6 +11,12 @@ Only complete blocks are ever written, which means no duplicates, no gaps and
 an exact resume point. A single block holding 1,000+ transfers of one token is
 paged on its own with startblock = endblock.
 
+A short or empty answer is NOT taken as the end of the range: under load
+Etherscan returned one mid-range and our first full pull silently stopped ~2
+days early. So the last block of every multi-block batch is dropped and
+re-asked (short batches included), and the walk ends only after two empty
+answers in a row.
+
 The V2 tokentx response has no logIndex (V1 had one), and one transaction can
 emit several transfers of the same token. Records arrive in on-chain order and
 whole blocks are always written together, so each transfer is numbered within
@@ -76,6 +82,11 @@ class EtherscanClient:
             "module": "block", "action": "getblocknobytime", "timestamp": timestamp, "closest": "after",
         }))
 
+    def block_time(self, block: int) -> datetime:
+        block_data = self._call({"module": "proxy", "action": "eth_getBlockByNumber",
+                                 "tag": hex(block), "boolean": "false"})
+        return datetime.fromtimestamp(int(block_data["timestamp"], 16), tz=timezone.utc)
+
     def token_transfers_page(self, contract: str, start_block: int, end_block: int, page: int = 1) -> list[dict]:
         return self._call({
             "module": "account", "action": "tokentx", "contractaddress": contract,
@@ -89,25 +100,29 @@ def iter_complete_blocks(
 ) -> Iterator[tuple[list[dict], int]]:
     """Yield (records, next_start_block) batches that each cover only complete blocks."""
     cursor = start_block
+    confirmed_empty = False
     while cursor <= end_block:
         batch = fetch(cursor, end_block, 1)
-        if len(batch) < page_size:
-            yield batch, end_block + 1
-            return
+        if not batch:
+            if confirmed_empty:
+                yield [], end_block + 1
+                return
+            confirmed_empty = True  # ask once more before believing the range is finished
+            continue
+        confirmed_empty = False
         last_block = int(batch[-1]["blockNumber"])
         if last_block > cursor:
+            # The last block may be cut off (full batch or truncated answer): drop it, re-ask from it.
             complete = [r for r in batch if int(r["blockNumber"]) < last_block]
             yield complete, last_block
             cursor = last_block
             continue
-        # The whole batch is one block with page_size+ transfers: page through it alone.
+        # The whole batch is the single block `cursor`; page within it only if it filled the page.
         records = list(batch)
         page = 2
-        while True:
-            more = fetch(cursor, cursor, page)
-            records.extend(more)
-            if len(more) < page_size:
-                break
+        while len(batch) == page_size:
+            batch = fetch(cursor, cursor, page)
+            records.extend(batch)
             page += 1
         yield records, cursor + 1
         cursor += 1
@@ -161,10 +176,24 @@ def trim_to_checkpoint(data_path: Path, rows: int) -> int:
     return max(extra, 0)
 
 
+def last_stored_block(data_path: Path) -> int | None:
+    last = None
+    if data_path.exists():
+        with gzip.open(data_path, "rt") as f:
+            for line in f:
+                last = line
+    return int(json.loads(last)["blockNumber"]) if last else None
+
+
 def pull_token_transfers(
     client: EtherscanClient, symbol: str, contract: str, start_block: int, end_block: int, raw_dir: Path,
+    recheck: bool = False,
 ) -> dict:
-    """Pull every transfer of `contract` in [start_block, end_block] to gzipped JSON lines, resumably."""
+    """Pull every transfer of `contract` in [start_block, end_block] to gzipped JSON lines, resumably.
+
+    recheck=True resumes from the block after the last one actually stored, to
+    fill a range a previous run wrongly treated as finished.
+    """
     token_dir = raw_dir / symbol
     token_dir.mkdir(parents=True, exist_ok=True)
     state_path = token_dir / "state.json"
@@ -173,6 +202,9 @@ def pull_token_transfers(
     if state_path.exists():
         state = json.loads(state_path.read_text())
         trim_to_checkpoint(data_path, state["rows"])
+        if recheck:
+            last = last_stored_block(data_path)
+            state["next_block"] = state["start_block"] if last is None else last + 1
     else:
         state = {"symbol": symbol, "contract": contract, "start_block": start_block,
                  "end_block": end_block, "next_block": start_block, "rows": 0, "calls": 0}

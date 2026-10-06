@@ -124,3 +124,33 @@ def test_trim_to_checkpoint_removes_rows_written_after_last_save(tmp_path):
     with gzip.open(path, "rt") as f:
         assert f.read().split() == [str(i) for i in range(7)]
     assert trim_to_checkpoint(path, 7) == 0
+
+
+def flaky_fetch(chain, page_size, at_start, mangle):
+    """Wrap the fake fetch so the first answer starting at `at_start` is mangled."""
+    real_fetch, _ = make_fetch(chain, page_size)
+    state = {"done": False}
+
+    def fetch(start, end, page):
+        batch = real_fetch(start, end, page)
+        if start == at_start and not state["done"]:
+            state["done"] = True
+            return mangle(batch)
+        return batch
+
+    return fetch
+
+
+def test_pagination_survives_a_spurious_empty_answer():
+    """Under load the API answered 'nothing here' mid-range; our first pull stopped 2 days early."""
+    chain = make_chain({100: 3, 101: 2, 105: 4, 106: 1, 110: 3})
+    fetch = flaky_fetch(chain, 4, at_start=105, mangle=lambda b: [])
+    out = [r for records, _ in iter_complete_blocks(fetch, 100, 120, 4) for r in records]
+    assert keys(out) == keys(chain)
+
+
+def test_pagination_survives_a_truncated_answer_cut_mid_block():
+    chain = make_chain({100: 3, 101: 2, 105: 1})
+    fetch = flaky_fetch(chain, 6, at_start=100, mangle=lambda b: b[:4])  # cuts block 101 in half
+    out = [r for records, _ in iter_complete_blocks(fetch, 100, 120, 6) for r in records]
+    assert keys(out) == keys(chain)
