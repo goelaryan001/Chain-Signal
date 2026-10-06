@@ -99,8 +99,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 0</span><span class="t">Environment</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill later">later</span></li>
     </ol>
@@ -205,7 +205,8 @@ tests/test_environment.py</code></pre>
     <ul class="tight">
       <li>Docker Desktop was not running. We launched it and it was up within a few seconds. No code change.</li>
       <li>Java 21 rules out Spark 3.5, so we chose PySpark 4.0. Recorded in the comment in <code>requirements.txt</code>.</li>
-      <li>No code bugs in this phase.</li>
+      <li>No code bugs found in this phase at the time.</li>
+      <li><b>Correction found later (Phase 3, Bug 5):</b> the Spark check above passed, but it ran entirely inside Java and never started a Python worker. So it couldn't see that Spark's workers would use the system Python 3.8. The check now also runs a Python-worker job and prints the worker's Python version.</li>
     </ul>
 
     <h3>Explain it out loud</h3>
@@ -496,14 +497,129 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </ul>
   </article>
 
+  <article class="entry" id="phase-3">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 3 · 6 Oct 2026</span>
+      <h2>Feature engineering with PySpark</h2>
+      <div class="stamp"><span>branch <b>phase-3-features</b></span><span>commits <b>3af903a</b> → <b>5b0fa42</b></span><span>tests <b>33 passing</b></span><span>pipeline checks <b>5/5</b></span><span>bugs fixed <b>2</b></span></div>
+    </div>
+    <p>Goal: turn the cleaned data into features that describe "normal" for each coin and token, so that Phase 4's models can recognise departures from it. Carrying the warning from Phase 2: round-trip trading must be measured between <b>ordinary wallets only</b>, with pools, routers and bots separated out first.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Labelled addresses as contract or wallet</h3>
+        <p>An address's appearance says nothing about what it is. The "ordinary sender" we printed as a sample in Phase 1 turned out to be the <b>Wrapped LOOKS token contract</b>. So we asked Etherscan instead: its <code>getcontractcreation</code> endpoint returns creation details for any contract among up to 5 addresses, and wallets simply don't appear in the answer.</p>
+        <p>Only addresses taking part in a back-and-forth pair need a label: <b>13,204</b> of the 339,298. That's ~2,640 calls, run in 6 threads sharing one thread-safe rate limiter, cached and resumable. Result: <b>1,820 contracts (13.8%), 11,384 wallets</b>.</p>
+        <p class="why"><strong>Known limitation:</strong> smart-contract wallets (Safe multisigs, ERC-4337 accounts) are contracts too, so they're grouped with pools and routers. Wash trading done through smart wallets would be missed.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Moved data between ClickHouse and Spark via Parquet</h3>
+        <p>ClickHouse exports Parquet (93 MB in total), Spark reads it, computes the features and writes Parquet, and ClickHouse imports the result. That avoided a JDBC driver jar, both ends are columnar, and the files are checkpoints you can inspect. Dates cross the boundary as text and times as Unix seconds, because the two systems encode Parquet dates and timestamps differently, and silent conversion bugs there are common.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Market features: 917 coins × 1 year</h3>
+        <p>The rule behind every feature: <b>rolling statistics use only past days</b> (<code>rangeBetween(-30, -1)</code> over calendar days). If today were in its own baseline, a spike would partly hide itself. That's lookahead leakage.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Feature</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>return_z, volume_z</td><td>How unusual today's price move and volume are versus the coin's previous 30 days.</td></tr>
+            <tr><td>turnover_z</td><td>Volume ÷ market cap, standardized. Wash trading inflates turnover.</td></tr>
+            <tr><td>market_corr, market_beta</td><td>Rolling relationship with the market (the median return of all clean coins, so BTC and stablecoins don't dominate).</td></tr>
+            <tr><td>residual_z</td><td>The part of today's move the market doesn't explain, scaled by idiosyncratic volatility, σ·√(1−ρ²).</td></tr>
+            <tr><td>volume_price_gap</td><td>volume_z − |return_z|: a lot of trading with no price reaction. The wash-trading signature.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Two more rules: a return that spans a missing day is discarded, since a multi-day return isn't comparable to a 1-day one; and no feature is emitted until a coin has 20 days of history.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>On-chain features: 3 tokens × 88–89 full days</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Feature</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>rt_transfers, rt_share</td><td><b>Round-trip legs:</b> a wallet-to-wallet transfer a→b where b→a happened in the previous 7 days. Both sides must be labelled wallets. Trailing only: a transfer isn't marked by a reply that comes later.</td></tr>
+            <tr><td>new_addresses</td><td>Addresses seen for the first time that day. Real growth brings new participants; recycling doesn't.</td></tr>
+            <tr><td>top10_sender_share</td><td>Share of the day's volume sent by the 10 biggest senders.</td></tr>
+            <tr><td>large_transfers</td><td>Transfers above the token's own 99th percentile.</td></tr>
+            <tr><td>hub_share</td><td>Share of transfers touching an address with 1,000+ distinct counterparties (pool, router or exchange-like).</td></tr>
+            <tr><td>activity_vs_participants</td><td>transfers_z − addresses_z: activity growing faster than the set of people doing it.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Trailing windows are 14 days (with at least 10 days of history), since the on-chain pull is 90 days long. The first and last day of the window are partial and are dropped.</p>
+        <p class="why"><strong>Design change:</strong> the plan had a "wallet-to-wallet share of all transfers" feature. That needs a label for every one of the 339k addresses, about 68,000 API calls, so it was replaced by <code>hub_share</code>, which comes straight from the data.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Tested every feature on hand-built data</h3>
+        <p>The features are pure functions over DataFrames, so 10 Spark tests build tiny datasets where the answer is known. A +0.5 return after 25 calm days must score z &gt; 10. No features before 20 days of history. A return after a gap is dropped. A volume spike with a flat price gives a high gap score. A reply within 7 days is a round-trip leg but one after 8 days isn't. A pair involving a contract or an unlabelled address never counts. Partial edge days are dropped.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Ran the pipeline and verified it</h3>
+        <div class="result">
+          <span class="ok">[ok] market rows preserved: clean=294,684 features=294,684</span>
+          <span class="ok">[ok] no infinite market z-scores</span>
+          <span class="ok">[ok] 273,727 rows with return_z across 917 coins (the rest are warm-up days)</span>
+          <span class="ok">[ok] on-chain days = rollup days minus the 2 partial edges (LINK 89, PEPE 89, LOOKS 88)</span>
+          <span class="ok">[ok] Spark's daily transfer counts match ClickHouse's rollup on every day of every token</span>
+        </div>
+        <p>The last check is the strongest: two different systems computed the same numbers independently. The pipeline runs end to end in about 4 minutes.</p>
+      </div></li>
+    </ol>
+
+    <h3>What the features already show</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Finding</th><th>Evidence</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr><td>The Phase 2 warning was even bigger than it looked</td><td><b>96% (LINK, PEPE) and 98% (LOOKS)</b> of back-and-forth transfers involve a contract. Real wallet-to-wallet round trips are ~1% of transfers.</td><td>Without labels, the wash-trading signal would have been almost entirely DEX infrastructure.</td></tr>
+        <tr><td>Crypto has fat tails</td><td>|return_z| &gt; 3 on 2.8% of days, ~10x the 0.27% a normal distribution predicts.</td><td>Phase 4 must calibrate thresholds to the data. A textbook "z &gt; 3" flags far more than expected.</td></tr>
+        <tr><td>Exploding z-scores</td><td>novachargex volume_z = 201: when the trailing std is tiny, z-scores blow up.</td><td>Phase 4 should test robust z-scores (median / MAD).</td></tr>
+        <tr><td>Wash-trading-shaped candidates</td><td>wojak-5: $1.21B volume, volume_z 20.9, return_z −0.38. celer-network: $1.49B, volume_z 28.8. beldex: $551M, volume_z 43.</td><td>Candidates only. A volume spike could also be a feed error in the volume figure. Phase 5 checks them against outside sources.</td></tr>
+        <tr><td>Recycled activity vs real interest</td><td>LINK on 31 Aug: 30,670 transfers (3x normal) from a flat set of addresses (addresses_z 0.19). PEPE on 20 Aug: transfers z 7.5, but addresses z 6.2 as well.</td><td>activity_vs_participants separates the two: LINK scores high, PEPE low.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Bugs, corrections and what they taught us</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix / correction</th></tr></thead>
+      <tbody>
+        <tr><td>Bug 5</td><td><b>All 10 Spark tests failed at once.</b> Root cause: Spark starts its Python worker processes with whatever <code>python3</code> is first on PATH, here the system <b>Python 3.8</b>, not the project's 3.11. The 3.8 workers crashed on a 3.11-only library call (<code>importlib.resources.files</code>).</td><td>Pin <code>PYSPARK_PYTHON</code> and <code>PYSPARK_DRIVER_PYTHON</code> to the interpreter running the job. <code>3af903a</code></td></tr>
+        <tr><td>Correction</td><td><b>Why didn't Phase 0 catch Bug 5?</b> Its check (<code>spark.range(...).sum()</code>) runs entirely inside Java and never starts a Python worker. The check passed, but it tested less than we assumed: <b>false confidence</b>.</td><td><code>check_env.py</code> now also runs a job on Python data and prints the worker's Python version ("Python workers run 3.11.0").</td></tr>
+        <tr><td>Bug 6</td><td>Address labelling <b>crashed at 1,515 of 13,204</b> with "rate limited 5 times". The limiter spaced call <i>starts</i> at 4/sec, but with 6 threads and network jitter, requests <i>arrived</i> bunched, so 5+ landed in the same second.</td><td>Rate lowered to 3/sec, and the rate-limit backoff is now exponential (up to 30 s, 8 tries). The cache let the rerun resume at 1,516 with nothing lost. <code>3af903a</code></td></tr>
+        <tr><td>Correction</td><td>My first speed reading for labelling (~200/min) suggested another problem. Measuring properly over a minute showed 845/min, right at the limit. The low number had included the job's startup time.</td><td>No change needed. Lesson: measure over a steady interval before diagnosing.</td></tr>
+        <tr><td>Design</td><td>The planned wallet-share feature needed ~68,000 label lookups.</td><td>Replaced by <code>hub_share</code>, derived from the data.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Commits</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Commit</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td>3af903a</td><td>Address labelling, market and on-chain feature code, 10 Spark tests, fixes for Bugs 5 and 6, stronger Phase 0 check</td></tr>
+        <tr><td>5b0fa42</td><td>Labels table, feature tables, Parquet IO, verified pipeline, README</td></tr>
+        <tr><td>next</td><td>This build log entry</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>How did you avoid lookahead leakage?</b> Every rolling window ends the day before the row it describes, and round trips only count a reply after the original transfer.</li>
+      <li><b>How did you avoid detecting Uniswap?</b> By labelling the 13,204 relevant addresses with Etherscan and counting round trips only between confirmed wallets. 96% of back-and-forth transfers involved a contract.</li>
+      <li><b>Why the median market return?</b> A cap-weighted index would be mostly BTC, ETH and stablecoins. The median is robust and represents the typical coin.</li>
+      <li><b>How do you know Spark computed the right numbers?</b> Unit tests with known answers, plus an independent cross-check: Spark's daily counts equal ClickHouse's rollup on every day.</li>
+      <li><b>What went wrong?</b> Spark workers ran the wrong Python. Our Phase 0 check couldn't see that because it never started a Python worker. So I fixed the check, not just the bug.</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Next session</span>
-    <h2 id="next">Phase 3: PySpark feature engineering</h2>
+    <h2 id="next">Phase 4: model comparison</h2>
     <ul class="tight">
-      <li>Read <code>market_daily_clean</code> and the transfers from ClickHouse into Spark.</li>
-      <li>Market features per coin: rolling mean and std of returns and volume, z-scores, volume relative to market cap, cross-asset correlation (how far each coin moves from the market).</li>
-      <li>On-chain features per token per day: transfers, unique addresses, large-transfer counts, and back-and-forth activity <b>between ordinary wallets only</b>, with pools, routers and bots separated out first.</li>
-      <li>Write the features back to ClickHouse.</li>
+      <li>Three detectors on the same features: a rolling z-score baseline (also tried in a robust median/MAD version, after the z = 201 finding), Isolation Forest, and Local Outlier Factor.</li>
+      <li>Thresholds calibrated to the data's fat tails, not textbook values.</li>
+      <li>Compare where they agree and disagree, and what each one catches that the others miss, including the wash-trading-shaped candidates found here.</li>
     </ul>
   </section>
 
