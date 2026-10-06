@@ -1,6 +1,6 @@
 """Tests for the pure ingestion logic (no network)."""
 from chainsignal.ingest.coingecko import MS_PER_DAY, parse_market_chart
-from chainsignal.ingest.etherscan import iter_complete_blocks, parse_transfer
+from chainsignal.ingest.etherscan import iter_complete_blocks, number_within_tx, parse_transfer
 
 
 # ---------- CoinGecko ----------
@@ -28,7 +28,7 @@ def test_parse_market_chart_tolerates_missing_series():
 
 def make_chain(blocks: dict[int, int]) -> list[dict]:
     """Fake transfer log: {block_number: n_transfers}, in block/log order."""
-    return [{"blockNumber": str(b), "logIndex": str(i), "hash": f"0x{b:x}{i}"}
+    return [{"blockNumber": str(b), "hash": f"0x{b:x}-{i}"}
             for b in sorted(blocks) for i in range(blocks[b])]
 
 
@@ -53,7 +53,7 @@ def collect(chain, start, end, page_size):
 
 
 def keys(records):
-    return [(r["blockNumber"], r["logIndex"]) for r in records]
+    return [(r["blockNumber"], r["hash"]) for r in records]
 
 
 def test_pagination_returns_every_record_exactly_once():
@@ -98,12 +98,17 @@ def test_pagination_resume_from_cursor_matches_single_run():
 
 def test_parse_transfer_scales_by_decimals_and_normalises():
     row = parse_transfer({
-        "blockNumber": "21000000", "timeStamp": "1767225600", "hash": "0xabc", "logIndex": "7",
+        "blockNumber": "21000000", "timeStamp": "1767225600", "hash": "0xabc", "txSeq": 7,
         "from": "0xAAA", "to": "0xBBB", "value": "1500000000000000000", "tokenDecimal": "18",
-        "tokenSymbol": "LINK",
+        "tokenSymbol": "LINK", "functionName": "transfer(address to, uint256 value)",
     })
     assert row["amount"] == 1.5
     assert row["value_raw"] == "1500000000000000000"
     assert row["from_address"] == "0xaaa" and row["to_address"] == "0xbbb"
     assert row["timestamp"].isoformat() == "2026-01-01T00:00:00+00:00"
-    assert row["block_number"] == 21_000_000 and row["log_index"] == 7
+    assert row["block_number"] == 21_000_000 and row["tx_seq"] == 7
+
+
+def test_number_within_tx_gives_unique_keys_for_multi_transfer_txs():
+    recs = [{"hash": "0xa"}, {"hash": "0xa"}, {"hash": "0xb"}, {"hash": "0xa"}]
+    assert [r["txSeq"] for r in number_within_tx(recs)] == [0, 1, 0, 2]

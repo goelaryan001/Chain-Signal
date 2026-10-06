@@ -10,6 +10,11 @@ off part-way, so that block is dropped and becomes the next `start_block`.
 Only complete blocks are ever written, which means no duplicates, no gaps and
 an exact resume point. A single block holding 1,000+ transfers of one token is
 paged on its own with startblock = endblock.
+
+The V2 tokentx response has no logIndex (V1 had one), and one transaction can
+emit several transfers of the same token. Records arrive in on-chain order and
+whole blocks are always written together, so each transfer is numbered within
+its transaction (txSeq) to give a unique (hash, txSeq) key.
 """
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
@@ -28,8 +33,9 @@ MAX_RECORDS = 1_000
 # Fields kept from each tokentx record; the rest (token name/symbol repeated on
 # every row, confirmations, input) is redundant or changes over time.
 TRANSFER_FIELDS = (
-    "blockNumber", "timeStamp", "hash", "logIndex", "transactionIndex",
+    "blockNumber", "timeStamp", "hash", "txSeq", "transactionIndex",
     "from", "to", "value", "tokenDecimal", "tokenSymbol", "gasUsed", "gasPrice",
+    "methodId", "functionName",
 )
 
 FetchPage = Callable[[int, int, int], list[dict]]  # (start_block, end_block, page) -> records
@@ -107,6 +113,17 @@ def iter_complete_blocks(
         cursor += 1
 
 
+def number_within_tx(records: list[dict]) -> list[dict]:
+    """Add txSeq: 0, 1, 2... per transaction hash, in the order the API returned them."""
+    seen: dict[str, int] = {}
+    out = []
+    for r in records:
+        seq = seen.get(r["hash"], 0)
+        seen[r["hash"]] = seq + 1
+        out.append({**r, "txSeq": seq})
+    return out
+
+
 def slim_transfer(record: dict) -> dict:
     return {k: record.get(k) for k in TRANSFER_FIELDS}
 
@@ -118,12 +135,13 @@ def parse_transfer(record: dict) -> dict:
         "block_number": int(record["blockNumber"]),
         "timestamp": datetime.fromtimestamp(int(record["timeStamp"]), tz=timezone.utc),
         "tx_hash": record["hash"],
-        "log_index": int(record["logIndex"]),
+        "tx_seq": int(record["txSeq"]),
         "from_address": record["from"].lower(),
         "to_address": record["to"].lower(),
         "value_raw": record["value"],
         "amount": int(record["value"]) / 10 ** decimals,
         "token_symbol": record["tokenSymbol"],
+        "function_name": record.get("functionName") or "",
     }
 
 
@@ -154,7 +172,7 @@ def pull_token_transfers(
     for records, next_block in iter_complete_blocks(fetch, state["next_block"], state["end_block"]):
         if records:
             with gzip.open(data_path, "at") as f:
-                for r in records:
+                for r in number_within_tx(records):
                     f.write(json.dumps(slim_transfer(r)) + "\n")
         state["rows"] += len(records)
         state["next_block"] = next_block
