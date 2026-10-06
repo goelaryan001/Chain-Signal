@@ -98,8 +98,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
     <ol class="phases">
       <li class="is-done"><span class="n">Phase 0</span><span class="t">Environment</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill later">later</span></li>
@@ -378,13 +378,132 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
   </article>
 
 
+  <article class="entry" id="phase-2">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 2 · 6 Oct 2026</span>
+      <h2>ClickHouse schema, load and cleaning layer</h2>
+      <div class="stamp"><span>branch <b>phase-2-clickhouse</b></span><span>commits <b>b9ccbb7</b> → <b>ab92530</b></span><span>tests <b>22 passing</b> (17 unit, 5 live-database)</span><span>load verification <b>15/15</b></span></div>
+    </div>
+    <p>Goal: put the raw data into ClickHouse in tables designed for how we'll query them, prove that nothing was lost or changed in the move, and build a cleaning layer for the feed glitches found in Phase 1, without ever modifying the raw data.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Designed the tables around how they'll be queried</h3>
+        <p>In ClickHouse, the <code>ORDER BY</code> of a MergeTree table is how rows are physically sorted on disk, and it doubles as the index. So the most important schema decision is: <i>what will most queries filter on?</i></p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Table</th><th>Sort key</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>coins</td><td>coin_id</td><td>1,000-row lookup table: id, symbol, name, rank.</td></tr>
+            <tr><td>market_daily_raw</td><td>(coin_id, date)</td><td>Features are "one coin over time", so each coin's year sits contiguous on disk.</td></tr>
+            <tr><td>token_transfers_raw</td><td>(token, block_time, tx_hash, tx_seq)</td><td>Queries are "one token over a time window", which become range reads.</td></tr>
+            <tr><td>token_daily</td><td>(token, day)</td><td>Rollup per token per day, rebuilt after each load.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Other choices:</p>
+        <ul class="tight">
+          <li><b>Monthly partitions</b> (about 13): reloading or deleting a month drops whole folders instead of rewriting rows.</li>
+          <li><b><code>LowCardinality</code></b> on coin ids, token symbols and function names. These have few distinct values, so ClickHouse stores a small dictionary plus integer codes. Addresses (~350k distinct) stay plain strings, because dictionaries only pay off below ~10k distinct values.</li>
+          <li><b><code>value_raw</code> as UInt256.</b> The exact on-chain integer. The PEPE checksum is ~9.6 × 10³², which would overflow a 64-bit integer. <code>amount</code> (divided by 10<sup>18</sup>) is a float for analytics.</li>
+        </ul>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Made loading idempotent</h3>
+        <p>Every load drops the tables, recreates them from <code>schema.sql</code> and inserts everything from the raw files, in batches of 100k rows. The raw files are the source of truth, so running the load twice gives the same result. It never double-counts, and schema changes always apply. A full load takes ~20 seconds.</p>
+        <p class="why"><strong>Why the daily rollup is not a materialized view:</strong> ClickHouse's materialized views are insert triggers. They're great for streaming, where data arrives once. In a batch pipeline that reloads, the trigger fires again on every reload and silently double-counts unless you also clear its output. An explicit <code>rollup.sql</code> step after loading is simpler and easy to verify.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Verified the load independently</h3>
+        <p><code>scripts/load_clickhouse.py</code> doesn't trust the loader's own counts. It re-reads the raw files separately and compares against ClickHouse:</p>
+        <div class="result">
+          <span class="ok">[ok] market rows: files=319,158 clickhouse=319,158 · (coin, date) keys unique</span>
+          <span class="ok">[ok] LINK rows 1,012,936 · keys unique · sum(value_raw) exact to the last digit</span>
+          <span class="ok">[ok] PEPE rows 622,132 · keys unique · sum(value_raw) = 962,016,337,991,980,648,104,278,860,771,052</span>
+          <span class="ok">[ok] LOOKS rows 3,856 · keys unique · sum exact</span>
+          <span class="ok">[ok] token_daily totals add back up to the raw counts for every token</span>
+          <span class="ok">LOAD VERIFIED (15/15)</span>
+        </div>
+        <p>The exact 256-bit sum is the strongest check. If any single transfer were missing, duplicated or had its value altered, the sum would differ.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Measured compression, then changed the schema</h3>
+        <p>The transfers table compressed only 2.1x. A per-column breakdown showed <b>hashes and addresses were 68% of the bytes</b>. They're random hex text, which compresses badly, and text doubles their size (2 characters per byte). We tested two alternatives on a copy of the table:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Layout</th><th>On disk</th><th>Typical query</th><th>Readable</th></tr></thead>
+          <tbody>
+            <tr><td>Plain String, default LZ4</td><td>173 MB</td><td>~25 ms</td><td>yes</td></tr>
+            <tr><td>Binary FixedString(32/20) + codecs</td><td>89 MB</td><td>~17 ms</td><td>no, needs hex() everywhere</td></tr>
+            <tr><td>String + ZSTD, Delta on block/time ✔</td><td>96 MB</td><td>~27 ms</td><td>yes</td></tr>
+          </tbody>
+        </table></div>
+        <p class="why"><strong>Decision:</strong> keep readable strings and switch codecs. ZSTD's entropy coding recovers most of the hex overhead, and <code>Delta</code> stores the steadily increasing block numbers and times as small differences. That's 90% of the saving at no readability cost. At billions of rows, the binary layout would be worth its awkwardness, and the trade-off is recorded in <code>schema.sql</code>.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Built the cleaning layer from evidence</h3>
+        <p>Before setting any threshold, we queried the loaded data. There are 324 day-over-day moves of more than 10x, across 41 coins, and only 101 of them snap back the next day. The rest are <b>regime switches</b>: Bittensor subnet tokens sit at the wrong price for weeks, and they flip on the <i>same dates</i> (19 Jan, 10 Feb, 23 Apr, 31 May). That's one systematic feed problem, not many separate glitches.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Status</th><th>Rule</th><th>Coins</th><th>Reasoning</th></tr></thead>
+          <tbody>
+            <tr><td>feed_glitch</td><td>2+ moves &gt;10x</td><td>28</td><td>Every multi-jump coin we inspected was a glitch, e.g. a tokenized treasury bill "falling 96%" then rebounding 24x.</td></tr>
+            <tr><td>stale_feed</td><td>&gt;20% zero-volume days</td><td>55</td><td>A price is published but no one trades. 47 coins have zero volume on half their days.</td></tr>
+            <tr><td>ok</td><td>everything else</td><td>917</td><td>294,684 rows. The modelling input.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Coins with exactly <b>one</b> extreme move are kept, with that row flagged (11 rows). Several look like real events, and those are exactly what the detector should find: power-protocol −90% on $48M volume, bulla-3 −94% on $34M (rug-pull shapes), a-meme-coin 726x on $276M (a launch pump). Phase 5 judges them.</p>
+        <p>All of this is three SQL views (<code>market_daily_flagged</code> → <code>coin_quality</code> → <code>market_daily_clean</code>). The raw table is untouched, and every exclusion is visible and reversible in <code>coin_quality</code>.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Tests</h3>
+        <p>Unit tests for the SQL splitter and the row builder (column order, exact UInt256 values). Five <b>live-database</b> tests check the loaded result itself: no excluded coin leaks into the clean view; no clean coin has repeated extreme moves; the first row of each coin is never flagged (it has no previous price); the rollup totals match the raw table; only the two edge days of the window are marked partial. 22 tests pass.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>A first look at back-and-forth trading, and a warning</h3>
+        <p>A quick query found address pairs sending the same token both ways, at least 5 times each direction. It scanned all 1.64M transfers in under half a second, and found 2,340 such pairs for LINK, 765 for PEPE and 20 for LOOKS.</p>
+        <p class="why"><strong>But the busiest pairs are not wash traders.</strong> One address appears in 5 of the top 8 pairs, across both LINK and PEPE. That's the shape of a DEX pool or router contract, which trades with everyone. Another starts with <code>0x00000000…</code>, a vanity prefix common for MEV bots. So <b>contracts must be separated from ordinary wallets</b> before hunting wash trading, or the detector will "discover" Uniswap. This shapes the Phase 3 on-chain features.</p>
+      </div></li>
+    </ol>
+
+    <h3>Bugs and surprises</h3>
+    <ul class="tight">
+      <li>No code bugs this phase. The load passed verification on the first run.</li>
+      <li>Surprise 1: hashes and addresses were 68% of storage. That led to the codec change (173 → 96 MB).</li>
+      <li>Surprise 2: the >10x glitches come in synchronized waves across Bittensor tokens, so we exclude by coin, not by row.</li>
+      <li>Surprise 3: the most "suspicious-looking" back-and-forth pairs are infrastructure contracts.</li>
+    </ul>
+
+    <h3>Commits</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Commit</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td>b9ccbb7</td><td>Schema, loader, daily rollup, verification, measured codecs, loader tests</td></tr>
+        <tr><td>ab92530</td><td>Data-quality views and live-database tests</td></tr>
+        <tr><td>next</td><td>README tables section and this build log entry</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>Why ClickHouse?</b> A columnar store that reads only the columns a query touches, with sort-key indexes and per-column codecs. Our workload is append-once, aggregate-many: exactly its design point. Scanning all 1.64M transfers to group address pairs took under 0.5 s on a laptop.</li>
+      <li><b>How did you choose the sort keys?</b> From the queries: per coin over time, per token over a time window.</li>
+      <li><b>How do you know the load is right?</b> An independent recount from the raw files, key uniqueness, and an exact 256-bit checksum of every value.</li>
+      <li><b>How did you clean the data without biasing it?</b> Thresholds came from inspecting the data. Exclusions are by coin, visible in a view and reversible. Single extreme moves are kept, because they might be the real anomalies we're looking for.</li>
+      <li><b>Why not a materialized view?</b> They're insert triggers, so batch reloads would double-count. An explicit rollup step is simpler to verify.</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Next session</span>
-    <h2 id="next">Phase 2: ClickHouse schema and load</h2>
+    <h2 id="next">Phase 3: PySpark feature engineering</h2>
     <ul class="tight">
-      <li>Design the raw tables: one for daily market data, one for on-chain transfers. Choose the ClickHouse table engine, sort key and partitioning for how we'll query (per coin over time, per token per day).</li>
-      <li>Load 319,158 market rows and 1,638,924 transfers, then check the row counts match the raw files exactly.</li>
-      <li>Plan the cleaning layer for the feed glitches found above, as a separate view or table, so raw data stays untouched.</li>
+      <li>Read <code>market_daily_clean</code> and the transfers from ClickHouse into Spark.</li>
+      <li>Market features per coin: rolling mean and std of returns and volume, z-scores, volume relative to market cap, cross-asset correlation (how far each coin moves from the market).</li>
+      <li>On-chain features per token per day: transfers, unique addresses, large-transfer counts, and back-and-forth activity <b>between ordinary wallets only</b>, with pools, routers and bots separated out first.</li>
+      <li>Write the features back to ClickHouse.</li>
     </ul>
   </section>
 
