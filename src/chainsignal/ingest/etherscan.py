@@ -155,7 +155,12 @@ def parse_transfer(record: dict) -> dict:
         "to_address": record["to"].lower(),
         "value_raw": record["value"],
         "amount": int(record["value"]) / 10 ** decimals,
+        "decimals": decimals,
         "token_symbol": record["tokenSymbol"],
+        "tx_index": int(record.get("transactionIndex") or 0),
+        "gas_used": int(record.get("gasUsed") or 0),
+        "gas_price": int(record.get("gasPrice") or 0),
+        "method_id": record.get("methodId") or "",
         "function_name": record.get("functionName") or "",
     }
 
