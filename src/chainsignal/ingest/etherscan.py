@@ -55,7 +55,7 @@ class EtherscanClient:
     def _call(self, params: dict, retries: int = 5):
         params = {"chainid": self.chain_id, "apikey": self.api_key, **params}
         for attempt in range(retries):
-            data = get_json(self.session, BASE_URL, self.limiter, params)
+            data = get_json(self.session, BASE_URL, self.limiter, params, max_retries=10)
             if data.get("status") == "1" or data.get("jsonrpc"):
                 return data["result"]
             message = f"{data.get('message')}: {data.get('result')}"
