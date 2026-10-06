@@ -66,6 +66,18 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(block_time)
 ORDER BY (token, block_time, tx_hash, tx_seq);
 
+-- Contract-or-wallet labels for addresses in back-and-forth pairs (Phase 3, Etherscan).
+CREATE TABLE IF NOT EXISTS address_labels
+(
+    address        String,
+    is_contract    Bool,
+    creator        String,
+    factory        String,
+    created_block  UInt64
+)
+ENGINE = MergeTree
+ORDER BY address;
+
 -- Per token per UTC day, filled by an explicit rollup after each load (see rollup.sql).
 -- Not a materialized view: an MV fires on every insert, so a batch reload would
 -- double-count unless its target were also cleared. An explicit step is easier to verify.

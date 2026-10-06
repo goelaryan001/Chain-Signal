@@ -61,6 +61,13 @@ def transfer_rows(token_dir: Path) -> Iterator[list]:
             yield transfer_row(token_dir.name, json.loads(line))
 
 
+def label_rows(path: Path) -> Iterator[list]:
+    with path.open() as f:
+        for line in f:
+            r = json.loads(line)
+            yield [r["address"], r["is_contract"], r["creator"], r["factory"], r["created_block"]]
+
+
 # ---------- load ----------
 
 def insert_batched(client: Client, table: str, rows: Iterator[list], columns: list[str],
@@ -80,7 +87,7 @@ def insert_batched(client: Client, table: str, rows: Iterator[list], columns: li
 
 def load_all(client: Client, raw_dir: Path) -> dict[str, int]:
     """Drop and recreate the tables, insert everything, rebuild the daily rollup."""
-    for table in ("coins", "market_daily_raw", "token_transfers_raw", "token_daily"):
+    for table in ("coins", "market_daily_raw", "token_transfers_raw", "token_daily", "address_labels"):
         client.command(f"DROP TABLE IF EXISTS {table}")
     run_sql_file(client, "schema.sql")
 
@@ -94,6 +101,12 @@ def load_all(client: Client, raw_dir: Path) -> dict[str, int]:
     for token_dir in sorted(p for p in es.iterdir() if (p / "transfers.jsonl.gz").exists()):
         counts[f"transfers:{token_dir.name}"] = insert_batched(
             client, "token_transfers_raw", transfer_rows(token_dir), TRANSFER_COLUMNS)
+
+    labels_path = es / "address_labels.jsonl"
+    if labels_path.exists():
+        counts["address_labels"] = insert_batched(
+            client, "address_labels", label_rows(labels_path),
+            ["address", "is_contract", "creator", "factory", "created_block"])
 
     run_sql_file(client, "rollup.sql")
     run_sql_file(client, "quality.sql")

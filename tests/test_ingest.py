@@ -154,3 +154,11 @@ def test_pagination_survives_a_truncated_answer_cut_mid_block():
     fetch = flaky_fetch(chain, 6, at_start=100, mangle=lambda b: b[:4])  # cuts block 101 in half
     out = [r for records, _ in iter_complete_blocks(fetch, 100, 120, 6) for r in records]
     assert keys(out) == keys(chain)
+
+
+def test_label_batch_marks_only_returned_addresses_as_contracts():
+    from chainsignal.ingest.labels import label_batch
+    rows = label_batch(["0xAAA", "0xbbb"], [{"contractAddress": "0xaaa", "contractCreator": "0xC",
+                                             "contractFactory": "", "blockNumber": "42"}])
+    assert [(r["address"], r["is_contract"], r["created_block"]) for r in rows] == [
+        ("0xaaa", True, 42), ("0xbbb", False, 0)]
