@@ -67,6 +67,13 @@ def main() -> int:
     print("verifying against raw files...")
     ok = verify(client, file_truth())
 
+    print("\ndata quality (coin_quality view):")
+    for status, coins, rows in client.query("""
+        SELECT status, count(), sum(days) FROM coin_quality GROUP BY status ORDER BY status""").result_rows:
+        print(f"  {status:<12} {coins:>4} coins  {rows:>8,} coin-days")
+    clean = client.query("SELECT uniqExact(coin_id), count(), countIf(extreme_move) FROM market_daily_clean").result_rows[0]
+    print(f"  market_daily_clean: {clean[0]} coins, {clean[1]:,} rows, {clean[2]} flagged extreme moves kept")
+
     print("\nstorage (compressed vs uncompressed):")
     for table, rows, comp, raw, ratio in client.query("""
         SELECT table, sum(rows), formatReadableSize(sum(data_compressed_bytes)),

@@ -96,4 +96,5 @@ def load_all(client: Client, raw_dir: Path) -> dict[str, int]:
             client, "token_transfers_raw", transfer_rows(token_dir), TRANSFER_COLUMNS)
 
     run_sql_file(client, "rollup.sql")
+    run_sql_file(client, "quality.sql")
     return counts
