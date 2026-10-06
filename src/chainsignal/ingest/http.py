@@ -1,21 +1,24 @@
 """Shared HTTP plumbing for the ingestion clients: pacing and retries."""
+import threading
 import time
 
 import requests
 
 
 class RateLimiter:
-    """Enforces a minimum interval between calls (simple, deterministic pacing)."""
+    """Enforces a minimum interval between calls; safe to share across threads."""
 
     def __init__(self, calls_per_second: float):
         self.min_interval = 1.0 / calls_per_second
         self._last = 0.0
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        delay = self._last + self.min_interval - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
-        self._last = time.monotonic()
+        with self._lock:  # sleeping inside the lock is what spaces out concurrent callers
+            delay = self._last + self.min_interval - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self._last = time.monotonic()
 
 
 def get_json(

@@ -22,7 +22,10 @@ def check_spark() -> None:
     spark = get_spark("chainsignal-check")
     spark.sparkContext.setLogLevel("ERROR")
     total = spark.range(1_000_000).selectExpr("sum(id) AS s").collect()[0]["s"]
-    print(f"[ok]   Spark {spark.version} ran a local job (sum 0..999999 = {total})")
+    # spark.range runs entirely in the JVM; a Python-data job also proves the Python workers start
+    worker_py = spark.sparkContext.parallelize([0], 1).map(lambda _: __import__("sys").version.split()[0]).first()
+    print(f"[ok]   Spark {spark.version} ran a local job (sum 0..999999 = {total}); "
+          f"Python workers run {worker_py}")
     spark.stop()
 
 

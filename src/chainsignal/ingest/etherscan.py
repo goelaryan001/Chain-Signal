@@ -52,23 +52,25 @@ class EtherscanError(RuntimeError):
 
 
 class EtherscanClient:
-    def __init__(self, api_key: str, calls_per_second: float = 4, chain_id: int = 1):
+    def __init__(self, api_key: str, calls_per_second: float = 4, chain_id: int = 1,
+                 limiter: RateLimiter | None = None):
         self.session = requests.Session()
         self.api_key = api_key
         self.chain_id = chain_id
-        self.limiter = RateLimiter(calls_per_second)
+        self.limiter = limiter or RateLimiter(calls_per_second)
 
-    def _call(self, params: dict, retries: int = 5):
+    def _call(self, params: dict, retries: int = 8):
         params = {"chainid": self.chain_id, "apikey": self.api_key, **params}
         for attempt in range(retries):
             data = get_json(self.session, BASE_URL, self.limiter, params, max_retries=10)
             if data.get("status") == "1" or data.get("jsonrpc"):
                 return data["result"]
             message = f"{data.get('message')}: {data.get('result')}"
-            if "No transactions found" in message or "No records found" in message:
+            if any(m in message for m in ("No transactions found", "No records found", "No data found")):
                 return []
             if "rate limit" in message.lower():
-                time.sleep(1 + attempt)
+                # requests spaced 1/rate apart can still arrive bunched (network jitter, threads)
+                time.sleep(min(2 ** attempt, 30))
                 continue
             raise EtherscanError(message)
         raise EtherscanError(f"rate limited {retries} times: {params.get('action')}")
@@ -86,6 +88,11 @@ class EtherscanClient:
         block_data = self._call({"module": "proxy", "action": "eth_getBlockByNumber",
                                  "tag": hex(block), "boolean": "false"})
         return datetime.fromtimestamp(int(block_data["timestamp"], 16), tz=timezone.utc)
+
+    def contract_creations(self, addresses: list[str]) -> list[dict]:
+        """Creation info for the contracts among up to 5 addresses (wallets are simply absent)."""
+        return self._call({"module": "contract", "action": "getcontractcreation",
+                           "contractaddresses": ",".join(addresses)})
 
     def token_transfers_page(self, contract: str, start_block: int, end_block: int, page: int = 1) -> list[dict]:
         return self._call({
