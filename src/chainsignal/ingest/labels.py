@@ -67,3 +67,17 @@ def label_addresses(api_key: str, addresses: list[str], cache_path: Path,
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(work, batches))  # list() re-raises any worker exception
     return {"requested": len(set(addresses)), "already_cached": len(done), "fetched": len(todo)}
+
+
+# every address that sent AND received the same token with the same counterparty
+CANDIDATES_SQL = """
+SELECT DISTINCT arrayJoin([a, b]) FROM (
+    SELECT least(from_address, to_address) AS a, greatest(from_address, to_address) AS b,
+           countIf(from_address = a) AS ab, countIf(from_address = b) AS ba
+    FROM token_transfers_raw GROUP BY token, a, b)
+WHERE ab >= 1 AND ba >= 1
+"""
+
+
+def label_candidates(client) -> list[str]:
+    return [r[0] for r in client.query(CANDIDATES_SQL).result_rows]
