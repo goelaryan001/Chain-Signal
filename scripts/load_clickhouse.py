@@ -74,7 +74,9 @@ def main() -> int:
     client = get_client()
     start = time.time()
     counts = load_all(client, RAW_DIR)
+    dbt = counts.pop("dbt")
     print(f"loaded in {time.time() - start:.0f}s: " + ", ".join(f"{k}={v:,}" for k, v in counts.items()))
+    print(f"dbt build: {dbt}")
 
     print("verifying against raw files...")
     ok = verify(client, file_truth())

@@ -160,7 +160,7 @@ def insert_batched(client: Client, table: str, rows: Iterator[list], columns: li
 
 
 def load_all(client: Client, raw_dir: Path) -> dict[str, int]:
-    """Drop and recreate the tables, insert everything, rebuild the daily rollup."""
+    """Drop and recreate the raw tables, insert everything, then `dbt build` the transformation layer."""
     for table in ("coins", "market_daily_raw", "token_transfers_raw", "token_daily", "address_labels"):
         client.command(f"DROP TABLE IF EXISTS {table}")
     run_sql_file(client, "schema.sql")
@@ -184,6 +184,6 @@ def load_all(client: Client, raw_dir: Path) -> dict[str, int]:
             client, "address_labels", label_rows(labels_path),
             ["address", "is_contract", "creator", "factory", "created_block"])
 
-    run_sql_file(client, "rollup.sql")
-    run_sql_file(client, "quality.sql")
+    from chainsignal.db.dbt import run_dbt   # transformation layer: dbt models + data-contract tests
+    counts["dbt"] = run_dbt(["build"])
     return counts

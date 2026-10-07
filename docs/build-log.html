@@ -106,8 +106,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Extra</span><span class="t">Dashboard + GitHub</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 7 · DE</span><span class="t">Continuous integration</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 8 · DE</span><span class="t">Dagster + incremental loads</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 9 · DE</span><span class="t">dbt models + tests</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 10 · DS</span><span class="t">Fix survivorship bias</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 9 · DE</span><span class="t">dbt models + tests</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 10 · DS</span><span class="t">Fix survivorship bias</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 11 · DS</span><span class="t">Precision study</span><span class="pill later">later</span></li>
     </ol>
   </section>
@@ -1034,6 +1034,54 @@ token_transfers ─┴─&gt; address_labels ┴─&gt; features ─&gt; anomaly
     </ul>
   </article>
 
+  <article class="entry" id="phase-9">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 9 · 7 Oct 2026 · data engineering track</span>
+      <h2>dbt: the transformation layer as tested models</h2>
+      <div class="stamp"><span>branch <b>phase-9-dbt</b></span><span>dbt <b>4 models · 28 tests</b></span><span>pytest <b>69</b> (60 in CI)</span><span>project moved to <b>~/Projects/Chain-Signal</b></span></div>
+    </div>
+    <p>Goal: move the hand-run SQL (quality views and daily rollup) into dbt, so the cleaning rules become documented, tested data contracts with a lineage graph. The interview question it answers: <i>"How do you test and document your transformations?"</i></p>
+    <ol class="steps">
+      <li><div class="body">
+        <h3>The dbt project</h3>
+        <p><code>dbt/</code>, using dbt-core 1.12 with the ClickHouse adapter 1.10. Models keep their existing names so Spark and everything downstream are unaffected: <code>market_daily_flagged</code> → <code>coin_quality</code> → <code>market_daily_clean</code> (views) and <code>token_daily</code> (table). Raw tables are declared as <b>sources</b>, and models read them only through <code>source()</code>/<code>ref()</code>. A test enforces that, because a hard-coded table name would silently break the lineage.</p>
+      </div></li>
+      <li><div class="body">
+        <h3>28 data-contract tests</h3>
+        <p><b>7 on the raw sources</b>, so bad raw data fails before any model builds: unique coin ids, no missing values in key columns, allowed <code>source</code> and token values, and every market row's coin must exist in <code>coins</code>. <b>Built-in tests on the models:</b> one verdict per coin and allowed status values. <b>9 singular tests:</b> unique market and transfer keys (the guards for the incremental loads), no excluded coin, volume glitch or repeated extreme move in the clean view, first row never flagged, rollup equals raw counts, unique rollup keys, only edge days partial.</p>
+      </div></li>
+      <li><div class="body">
+        <h3>Proved the migration changed nothing</h3>
+        <p>Passing tests only prove internal consistency. So the dbt outputs were fingerprinted, rebuilt with the old SQL and fingerprinted again:</p>
+        <div class="result">
+          <span class="ok">market_daily_flagged  320,158 rows  IDENTICAL</span>
+          <span class="ok">coin_quality            1,000 rows  IDENTICAL</span>
+          <span class="ok">market_daily_clean    294,674 rows  IDENTICAL</span>
+          <span class="ok">token_daily               275 rows  IDENTICAL</span>
+        </div>
+      </div></li>
+      <li><div class="body">
+        <h3>Wired in</h3>
+        <p>The full loader and Dagster's <code>transforms</code> asset run <code>dbt build</code>, and any failed test fails the run. <code>quality.sql</code> and <code>rollup.sql</code> are deleted, and dbt owns <code>token_daily</code>. A Dagster check that duplicated a dbt test was removed, so each rule has one definition. Results: full reload through dbt 32/32 nodes, load verified 15/15; <code>daily_update</code> in Dagster: RUN_SUCCESS, dbt 32/32, 3/3 asset checks. CI runs <code>dbt parse</code> to prove the project compiles.</p>
+      </div></li>
+    </ol>
+    <h3>Problems found in this phase</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Env</td><td>Installing dbt failed with <code>CERTIFICATE_VERIFY_FAILED</code>: a dependency downloads a file during install, and the python.org macOS Python doesn't use system certificates.</td><td>Pointed that one install at the certifi bundle (<code>SSL_CERT_FILE</code>). CI on Ubuntu is unaffected.</td></tr>
+        <tr><td>Env (major)</td><td>A Dagster run <b>stalled for 10+ minutes</b>. A stack sample showed it blocked in a kernel <code>read()</code> while importing a module. The file was <b>evicted to iCloud</b>: the project was on the iCloud-synced Desktop with "Optimize Mac Storage" on and only 16 GB free, and macOS had evicted <b>~13,000 project files</b> (.venv, raw data, even .git objects). At the same time, Spark's 4 GB driver plus Docker on an 8 GB Mac pushed swap to 5–7 GB.</td><td>With your OK: committed and pushed the work-in-progress, cloned into <code>~/Projects/Chain-Signal</code> (not synced), rebuilt the virtualenv, copied <code>data/</code> and verified <b>all 1,054 files by checksum</b>. Spark driver memory now defaults to 2 GB (configurable). Features went from <b>4m46s to 1m4s</b>. ClickHouse's Docker volume was unaffected.</td></tr>
+        <tr><td>Tooling</td><td>Used <code>timeout</code> in a command, which macOS doesn't have (exit 127).</td><td>Removed it.</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>How do you test transformations?</b> As dbt data contracts on the sources and the models, run on every build. A failure stops the pipeline before bad data reaches features.</li>
+      <li><b>How did you know the migration was safe?</b> Row-level fingerprints of every model matched the old SQL's output exactly.</li>
+      <li><b>Hardest debugging moment?</b> A hang with no error. A stack sample led to a blocked file read, and the file turned out to be evicted to iCloud, the opposite of where you'd look first.</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Roadmap · resume upgrades</span>
     <h2 id="next">Phases 8–11: closing the gaps an interviewer would probe</h2>
@@ -1042,8 +1090,8 @@ token_transfers ─┴─&gt; address_labels ┴─&gt; features ─&gt; anomaly
       <thead><tr><th>Phase</th><th>What</th><th>The interview question it answers</th></tr></thead>
       <tbody>
         <tr><td>8 · DE ✅ done</td><td><b>Dagster orchestration and incremental loads.</b> Each stage becomes an asset with dependencies; a daily schedule adds only new days; re-running a day replaces its partition (proved with identical counts and checksums).</td><td>"Does it run itself? What happens if a run fails, or runs twice?"</td></tr>
-        <tr><td>9 · DE (next)</td><td><b>dbt.</b> Quality views, clean view and rollup move into dbt models; the data contracts become dbt tests; docs site with a lineage graph.</td><td>"How do you test and document your transformations?"</td></tr>
-        <tr><td>10 · DS</td><td><b>Fix survivorship bias.</b> Pull coins ranked 1,001–3,500 (~2,500 CoinGecko calls, within the monthly budget) and choose the universe by market cap at the <i>start</i> of the window; rerun and measure what changed. Coins below rank 3,500 remain a stated limitation.</td><td>"Is your sample biased? What did fixing it change?"</td></tr>
+        <tr><td>9 · DE ✅ done</td><td><b>dbt.</b> Quality views, clean view and rollup move into dbt models; the data contracts become dbt tests; docs site with a lineage graph.</td><td>"How do you test and document your transformations?"</td></tr>
+        <tr><td>10 · DS (next)</td><td><b>Fix survivorship bias.</b> Pull coins ranked 1,001–3,500 (~2,500 CoinGecko calls, within the monthly budget) and choose the universe by market cap at the <i>start</i> of the window; rerun and measure what changed. Coins below rank 3,500 remain a stated limitation.</td><td>"Is your sample biased? What did fixing it change?"</td></tr>
         <tr><td>11 · DS</td><td><b>Precision study.</b> Check every 2+-method flag against a second, independent data source; hand-label a random sample of ~100 flagged days by cause; report precision and recall with bootstrap confidence intervals.</td><td>"How many of your alerts are real?"</td></tr>
       </tbody>
     </table></div>

@@ -16,7 +16,9 @@ def get_spark(app_name: str = "chainsignal") -> SparkSession:
         .master("local[*]")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.ui.showConsoleProgress", "false")
-        .config("spark.driver.memory", "4g")
+        # ~100 MB of Parquet in, so 2g is ample; 4g on an 8 GB laptop running Docker pushed
+        # the machine into heavy swap (Phase 9). Override with SPARK_DRIVER_MEMORY.
+        .config("spark.driver.memory", os.getenv("SPARK_DRIVER_MEMORY", "2g"))
         # the default 200 shuffle partitions is sized for clusters; ~2M rows locally needs few
         .config("spark.sql.shuffle.partitions", "8")
         .getOrCreate()

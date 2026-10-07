@@ -179,7 +179,7 @@ Why: today the pipeline is a list of scripts with full reloads. A scheduled, inc
 
 Result: 8 Dagster assets, 4 asset checks, a daily and a weekly job. Daily market days come from a 4-call `/coins/markets` snapshot (daily per-coin history would be 3x the API budget), marked provisional and replaced weekly with authoritative values. Loads swap whole day partitions atomically (`REPLACE PARTITION`). Re-runs and full reloads reproduce identical row-level fingerprints.
 
-### Phase 9 — dbt models and tests (data engineering)
+### Phase 9 — dbt models and tests (data engineering) ✅ done
 ```
 Move the SQL transformation layer (quality views, coin_quality, the clean view,
 the token daily rollup) into dbt with the ClickHouse adapter. Express the data
@@ -189,6 +189,8 @@ Generate the dbt docs site with the lineage graph. Run dbt build in the Dagster
 pipeline and dbt tests in CI where possible.
 ```
 Why: dbt is on most data engineering job descriptions. It also makes the cleaning rules into documented, tested contracts instead of hand-run SQL.
+
+Result: 4 models, 28 data-contract tests (7 on raw sources), static docs site with lineage. The migration produces row-for-row identical output to the old SQL. `dbt build` runs in the loader and in Dagster.
 
 ### Phase 10 — Fix survivorship bias (data science)
 ```

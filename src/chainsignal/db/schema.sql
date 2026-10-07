@@ -85,23 +85,6 @@ CREATE TABLE IF NOT EXISTS address_labels
 ENGINE = MergeTree
 ORDER BY address;
 
--- Per token per UTC day, filled by an explicit rollup after each load (see rollup.sql).
--- Not a materialized view: an MV fires on every insert, so a batch reload would
--- double-count unless its target were also cleared. An explicit step is easier to verify.
-CREATE TABLE IF NOT EXISTS token_daily
-(
-    token              LowCardinality(String),
-    day                Date,
-    transfers          UInt64,
-    amount_total       Float64,
-    amount_median      Float64,
-    amount_p99         Float64,
-    unique_senders     UInt64,
-    unique_receivers   UInt64,
-    unique_addresses   UInt64,
-    swap_transfers     UInt64,
-    plain_transfers    UInt64,
-    is_partial_day     UInt8             -- first/last day of the pull window are incomplete
-)
-ENGINE = MergeTree
-ORDER BY (token, day);
+-- The transformation layer (token_daily rollup, quality views, clean view) is the dbt
+-- project in dbt/, built and tested by `dbt build` after every load.
+

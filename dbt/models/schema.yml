@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: market_daily_flagged
+    description: Raw market rows with log return and data-quality flags (extreme_move, zero_volume, volume_glitch, gaps).
+    columns:
+      - name: coin_id
+        data_tests: [not_null]
+
+  - name: coin_quality
+    description: One data-quality verdict per coin; every exclusion is visible and reversible here.
+    columns:
+      - name: coin_id
+        data_tests:
+          - unique
+          - not_null
+          - relationships: {arguments: {to: "source('raw', 'coins')", field: coin_id}}
+      - name: status
+        data_tests:
+          - accepted_values: {arguments: {values: ["ok", "feed_glitch", "stale_feed"]}}
+
+  - name: market_daily_clean
+    description: The modelling input for Spark features. Only ok coins, no isolated volume collapses.
+
+  - name: token_daily
+    description: Per-token daily rollup of on-chain transfers (activity, participants, swaps).
+    columns:
+      - name: token
+        data_tests: [not_null]
+      - name: transfers
+        data_tests: [not_null]
