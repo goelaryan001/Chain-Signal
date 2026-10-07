@@ -899,6 +899,34 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </table></div>
   </article>
 
+  <article class="entry" id="phase-7">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 7 · 6 Oct 2026 · resume upgrades, data engineering track</span>
+      <h2>Continuous integration on GitHub</h2>
+      <div class="stamp"><span>branch <b>phase-7-ci</b></span><span>pull request <b>#1</b></span><span>CI <b>47 passed in 34.7 s</b></span></div>
+    </div>
+    <p>Goal: prove the project works on a clean machine, not just this laptop, and keep it that way. This is the first of five upgrades planned after Phase 6 to strengthen the project for data engineering and data science roles: <b>CI</b> → orchestration and incremental loads → dbt → fixing survivorship bias → a measured precision study.</p>
+    <ol class="steps">
+      <li><div class="body">
+        <h3>The workflow</h3>
+        <p><code>.github/workflows/ci.yml</code> runs on every push to <code>main</code> and every pull request. It uses a fresh Ubuntu machine with Python 3.11 and <b>Java 21</b> (Spark runs on the JVM), installs the project and runs <code>pytest -m "not integration"</code>.</p>
+        <p class="why"><strong>What runs and what doesn't:</strong> 47 tests run in CI: unit, Spark feature, evaluation and every per-bug regression test. The 8 live-database tests stay local, because they need ClickHouse loaded with the full 2M-row dataset, which takes API keys and about an hour of pulls. That's a deliberate trade-off, recorded in the workflow file.</p>
+      </div></li>
+      <li><div class="body">
+        <h3>Result</h3>
+        <div class="result">
+          <span class="ok">GitHub Actions, ubuntu-latest, Python 3.11, Temurin Java 21</span>
+          <span class="ok">47 passed, 8 deselected in 34.74s</span>
+        </div>
+        <p>It passed on the first run. Notably, the Bug 5 regression test (Spark workers must use the job's own Python) passes on a machine with a completely different Python setup, which is exactly the situation it guards against. The README now shows the CI badge.</p>
+      </div></li>
+    </ol>
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>Why not run every test in CI?</b> The live-database tests check the loaded result, so they'd need the full ingestion. Pure logic, Spark and regression tests run on every push; the end-to-end checks run in each pipeline script.</li>
+    </ul>
+  </article>
+
   <article class="entry" id="bug-index">
     <div class="entry-head">
       <span class="eyebrow">Project index</span>
