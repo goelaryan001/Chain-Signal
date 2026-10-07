@@ -103,6 +103,12 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill done">done</span></li>
+      <li class="is-done"><span class="n">Extra</span><span class="t">Dashboard + GitHub</span><span class="pill done">done</span></li>
+      <li class="is-done"><span class="n">Phase 7 · DE</span><span class="t">Continuous integration</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 8 · DE</span><span class="t">Dagster + incremental loads</span><span class="pill next">next</span></li>
+      <li><span class="n">Phase 9 · DE</span><span class="t">dbt models + tests</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 10 · DS</span><span class="t">Fix survivorship bias</span><span class="pill later">later</span></li>
+      <li><span class="n">Phase 11 · DS</span><span class="t">Precision study</span><span class="pill later">later</span></li>
     </ol>
   </section>
 
@@ -926,6 +932,21 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <li><b>Why not run every test in CI?</b> The live-database tests check the loaded result, so they'd need the full ingestion. Pure logic, Spark and regression tests run on every push; the end-to-end checks run in each pipeline script.</li>
     </ul>
   </article>
+
+  <section class="next-box" aria-labelledby="next">
+    <span class="eyebrow">Roadmap · resume upgrades</span>
+    <h2 id="next">Phases 8–11: closing the gaps an interviewer would probe</h2>
+    <p>The project is complete as designed (Phases 0–6). These phases strengthen it for both data engineering (DE) and data science (DS) roles. Full prompts are in Part 9 of the design doc.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Phase</th><th>What</th><th>The interview question it answers</th></tr></thead>
+      <tbody>
+        <tr><td>8 · DE (next)</td><td><b>Dagster orchestration and incremental loads.</b> Each stage becomes an asset with dependencies; a daily schedule adds only new days; re-running a day replaces its partition (proved with identical counts and checksums).</td><td>"Does it run itself? What happens if a run fails, or runs twice?"</td></tr>
+        <tr><td>9 · DE</td><td><b>dbt.</b> Quality views, clean view and rollup move into dbt models; the data contracts become dbt tests; docs site with a lineage graph.</td><td>"How do you test and document your transformations?"</td></tr>
+        <tr><td>10 · DS</td><td><b>Fix survivorship bias.</b> Pull coins ranked 1,001–3,500 (~2,500 CoinGecko calls, within the monthly budget) and choose the universe by market cap at the <i>start</i> of the window; rerun and measure what changed. Coins below rank 3,500 remain a stated limitation.</td><td>"Is your sample biased? What did fixing it change?"</td></tr>
+        <tr><td>11 · DS</td><td><b>Precision study.</b> Check every 2+-method flag against a second, independent data source; hand-label a random sample of ~100 flagged days by cause; report precision and recall with bootstrap confidence intervals.</td><td>"How many of your alerts are real?"</td></tr>
+      </tbody>
+    </table></div>
+  </section>
 
   <article class="entry" id="bug-index">
     <div class="entry-head">
