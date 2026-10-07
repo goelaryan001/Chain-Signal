@@ -865,12 +865,46 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </table></div>
   </article>
 
+  <article class="entry" id="dashboard">
+    <div class="entry-head">
+      <span class="eyebrow">After Phase 6 · 6 Oct 2026</span>
+      <h2>Pushed to GitHub, and an interactive dashboard</h2>
+      <div class="stamp"><span>branch <b>main</b></span><span>pushed to <b>github.com/goelaryan001/Chain-Signal</b></span></div>
+    </div>
+    <p>Goal: let anyone, including people who know nothing about the project, see the data and the analysis without running anything.</p>
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Pushed main</h3>
+        <p>A clean fast-forward from the repo's initial commit. A check beforehand confirmed that <code>.env</code> and the API keys never appear in any commit on any branch, and that no raw data is tracked.</p>
+      </div></li>
+      <li><div class="body">
+        <h3>Exported the dashboard data from the analysis itself</h3>
+        <p><code>scripts/build_dashboard.py</code> reruns the deterministic Phase 4 scoring through the shared pipeline and writes one 1.3 MB <code>data.json</code>: 165 coins (the top 150 plus every coin named in the analysis) with daily price, volume and each method's flags; the data-quality examples; the comparison; the candidates; the on-chain series; the evaluation results. Before any UI was built, the export was checked against the verified numbers (2,252 agreed days, overlap 0.73 / 0.11, Celer's $1.49B flagged by z-score and Isolation Forest).</p>
+      </div></li>
+      <li><div class="body">
+        <h3>Built the page to the charting guidance</h3>
+        <p>The three methods use the first three slots of a validated categorical palette. The validator was <i>run</i>, not eyeballed: all checks pass in light and dark mode. The aqua (LOF) colour is below 3:1 contrast in light mode, so every method also carries a text label and the flags are listed in tables. Other rules followed: price and volume are separate charts (never two y-axes), thin 2 px lines, hover tooltips everywhere, both themes, and phone width.</p>
+      </div></li>
+    </ol>
+    <h3>Problems found while building it</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Tooling</td><td>The palette validator "passed" with exit code 0 but printed nothing: it only runs its checks when the file is named exactly <code>validate_palette.js</code>, and my renamed copy did nothing. A silent pass is not a pass.</td><td>Ran it under its real name in an ES-module folder and got the full report.</td></tr>
+        <tr><td>Bug 12</td><td>The export crashed: ClickHouse returns dates to pandas as <code>Timestamp</code>s, but the day lookup used plain <code>date</code> keys.</td><td>Normalise every date before lookup.</td></tr>
+        <tr><td>Bug 13 (caught in review)</td><td>The first version reloaded the page on a theme change. If the host sets the theme attribute on load, even to the same value, that could reload forever.</td><td>Redraw the charts in place (debounced, only when the theme actually changed). Event listeners are attached once, so redraws can't add duplicates.</td></tr>
+        <tr><td>Finding</td><td>The rendered "agreed days" table opened with <code>apex-4</code>: rows of robust z around ±380–500. Sorting by z-score size surfaces the most extreme data, which is often residual glitches the cleaning rules didn't catch.</td><td>Sorted by agreement, then dollar volume. The top row is now BNB on 21 Aug 2026, the documented rally day. apex-4 is noted as a data-quality lead for a stricter cleaning rule.</td></tr>
+        <tr><td>Layout</td><td>Month labels collided on the small data-quality charts.</td><td>Small charts label every third month.</td></tr>
+      </tbody>
+    </table></div>
+  </article>
+
   <article class="entry" id="bug-index">
     <div class="entry-head">
       <span class="eyebrow">Project index</span>
       <h2>Every bug and correction</h2>
     </div>
-    <p>Ten bugs (numbered 1–11; there is no Bug 8), one environment failure and six corrections across six phases. Several were found phases after they were introduced. The pattern in how they were found is the most useful lesson of the project: <b>almost none showed up in summary statistics</b>. They were caught by reading actual rows, cross-checking against an independent source, or noticing that two numbers that should match didn't.</p>
+    <p>Twelve bugs (numbered 1–13; there is no Bug 8), one environment failure and six corrections across six phases and the dashboard. Several were found phases after they were introduced. The pattern in how they were found is the most useful lesson of the project: <b>almost none showed up in summary statistics</b>. They were caught by reading actual rows, cross-checking against an independent source, or noticing that two numbers that should match didn't.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>Introduced</th><th>Found</th><th>Problem</th><th>How it was caught</th></tr></thead>
       <tbody>
@@ -891,6 +925,8 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
         <tr><td>Bug 10</td><td>5</td><td>5</td><td>"No data" reported as "missed"</td><td>CACAO's all-NaN output</td></tr>
         <tr><td>Bug 11</td><td>6</td><td>6</td><td>Transfer counts doubled by <code>arrayJoin</code></td><td>Didn't match the Phase 2 verified count</td></tr>
         <tr><td>Correction</td><td>6</td><td>6</td><td>Stablecoin rule missed yield-bearing tokens</td><td>reUSD on the non-stablecoin list</td></tr>
+        <tr><td>Bug 12</td><td>dashboard</td><td>dashboard</td><td>Date type mismatch in the export</td><td>Crash</td></tr>
+        <tr><td>Bug 13</td><td>dashboard</td><td>dashboard</td><td>Possible endless reload on theme change</td><td>Reviewing my own code before publishing</td></tr>
       </tbody>
     </table></div>
     <p class="why">Design changes made on evidence, such as the codec choice, the wallet-share feature and the LOF rounding step, are recorded in their phase entries rather than here.</p>

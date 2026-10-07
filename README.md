@@ -19,6 +19,10 @@ The target pattern is **wash trading**: volume that rises without the price move
 
 Every number above is reproduced by `scripts/insights.py` (output in [docs/results/insights.txt](docs/results/insights.txt)).
 
+## Interactive dashboard
+
+[docs/dashboard/](docs/dashboard/) is a single-page explorer: pick any of 165 coins and see its price, volume and the days each detector flagged (with why), plus the data-quality examples, the model comparison, the wash-trading candidates, the on-chain view and the evaluation. Every number comes from `scripts/build_dashboard.py`, which exports `data.json` from the analysis database. To view it locally: `cd docs/dashboard && python -m http.server`, then open http://localhost:8000.
+
 ## Architecture
 
 ```mermaid
@@ -135,6 +139,7 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
 .venv/bin/python scripts/run_models.py                      # 3 detectors, comparison, anomaly_scores
 .venv/bin/python scripts/evaluate.py                        # injection + backtest -> docs/results/
 .venv/bin/python scripts/insights.py                        # every headline number
+.venv/bin/python scripts/build_dashboard.py                 # dashboard data -> docs/dashboard/data.json
 .venv/bin/pytest                                            # 55 tests (integration ones need ClickHouse loaded)
 ```
 
@@ -149,7 +154,7 @@ src/chainsignal/
   evaluation/   synthetic injection; backtest against documented events
 scripts/        one entry point per stage (listed above)
 tests/          unit, Spark, live-database and regression tests
-docs/           build log (every step, bug and correction) and results
+docs/           build log (every step, bug and correction), results, interactive dashboard
 ```
 
 | Table / view | Contents |

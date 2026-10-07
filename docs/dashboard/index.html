@@ -1,0 +1,801 @@
+<title>ChainSignal Explorer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* Layout: an analyst's dashboard — summary tiles and the data funnel first, then one section per stage
+   (explore, quality, models, wash trading, on-chain, evaluation), reachable from a sticky section bar. */
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --wash: #f0efec;
+  --m-zscore: #2a78d6; --m-iforest: #eb6834; --m-lof: #1baf7a;
+  --seq-1: #cde2fb; --seq-2: #86b6ef; --seq-3: #2a78d6; --seq-4: #184f95;
+  --good: #0ca30c; --critical: #d03b3b; --warning: #fab219; --good-text: #006300;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: #252523;
+    --m-zscore: #3987e5; --m-iforest: #d95926; --m-lof: #199e70;
+    --seq-1: #1c2a3d; --seq-2: #184f95; --seq-3: #3987e5; --seq-4: #9ec5f4;
+    --good-text: #0ca30c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: #252523;
+  --m-zscore: #3987e5; --m-iforest: #d95926; --m-lof: #199e70;
+  --seq-1: #1c2a3d; --seq-2: #184f95; --seq-3: #3987e5; --seq-4: #9ec5f4;
+  --good-text: #0ca30c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.55 var(--sans); padding: 0 16px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 32px 72px; display: grid; gap: 40px; }
+h1, h2, h3 { margin: 0; line-height: 1.2; text-wrap: balance; }
+h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); font-weight: 700; letter-spacing: -0.015em; }
+h2 { font-size: 1.45rem; font-weight: 650; }
+h3 { font-size: 1.02rem; font-weight: 600; }
+p { margin: 0; max-width: 72ch; }
+a { color: var(--m-zscore); }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.muted { color: var(--ink-2); }
+.small { font-size: 0.85rem; }
+.eyebrow { font: 600 0.72rem/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+header.top { display: grid; gap: 12px; }
+header.top .lede { font-size: 1.08rem; color: var(--ink-2); max-width: 78ch; }
+.links { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.9rem; }
+
+nav.sections { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--page);
+  border-bottom: 1px solid var(--grid); margin-inline: -16px; padding: 8px 16px; display: flex; gap: 4px; overflow-x: auto; }
+nav.sections a { white-space: nowrap; text-decoration: none; color: var(--ink-2); font-size: 0.86rem; padding: 6px 10px; border-radius: 6px; }
+nav.sections a:hover, nav.sections a:focus-visible { background: var(--wash); color: var(--ink); outline: none; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: grid; gap: 4px; }
+.tile .label { font-size: 0.82rem; color: var(--ink-2); }
+.tile .value { font-size: 1.6rem; font-weight: 650; line-height: 1.1; }
+.tile .note { font-size: 0.78rem; color: var(--muted); }
+
+section { display: grid; gap: 16px; scroll-margin-top: 56px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+/* funnel */
+.funnel { display: grid; gap: 10px; }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.stage { flex: 1 1 150px; min-width: 0; background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; }
+.stage .n { font-size: 1.15rem; font-weight: 650; }
+.stage .t { font-size: 0.8rem; color: var(--ink-2); }
+.arrow { align-self: center; color: var(--muted); font-size: 1.1rem; }
+.flow-label { font-size: 0.78rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+input[type="search"], select { font: inherit; font-size: 0.9rem; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); min-width: 0; }
+input[type="search"] { width: min(320px, 100%); }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.seg button, .chip { font: inherit; font-size: 0.85rem; padding: 6px 11px; background: var(--surface); color: var(--ink-2); border: 0; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--axis); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.chip { border: 1px solid var(--axis); border-radius: 999px; }
+.chip:hover, .seg button:hover { color: var(--ink); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--m-zscore); outline-offset: 2px; }
+
+/* charts */
+.chart { position: relative; width: 100%; min-width: 0; }
+.h-260 { height: 260px; } .h-200 { height: 200px; } .h-160 { height: 160px; } .h-120 { height: 120px; } .h-110 { height: 110px; } .h-300 { height: 300px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.84rem; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.key.line { width: 16px; height: 2px; border-radius: 1px; }
+
+/* tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; background: var(--surface); position: sticky; top: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--wash); }
+tbody tr.clickable { cursor: pointer; }
+.scroll { max-height: 360px; overflow-y: auto; }
+.dots { display: inline-flex; gap: 4px; vertical-align: middle; }
+.pill { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: var(--wash); color: var(--ink-2); }
+
+/* status */
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.86rem; }
+.status i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 0.72rem; }
+.status.good i { background: var(--good); } .status.bad i { background: var(--critical); } .status.none i { background: var(--muted); }
+.callout { border-left: 3px solid var(--m-zscore); padding: 4px 0 4px 14px; display: grid; gap: 6px; }
+.matrix td { text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; width: 25%; }
+ul.plain { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 80ch; }
+footer { font-size: 0.82rem; color: var(--muted); display: grid; gap: 4px; }
+.loading { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Crypto market &amp; on-chain anomaly detection</span>
+    <h1>ChainSignal Explorer</h1>
+    <p class="lede">One year of daily market data for the top 1,000 coins and every on-chain transfer of three tokens, cleaned, turned into features, and run through three anomaly detectors. The goal: find trading that inflates volume without real demand (wash trading), and be honest about what the detectors catch and miss.</p>
+    <div class="links"><a href="https://github.com/goelaryan001/Chain-Signal">Source code on GitHub</a><span class="muted" id="window"></span></div>
+  </header>
+
+  <nav class="sections" aria-label="Sections">
+    <a href="#flow">Data flow</a><a href="#explore">Explore a coin</a><a href="#quality">Data quality</a>
+    <a href="#market">Market-wide</a><a href="#models">Model comparison</a><a href="#wash">Wash trading</a>
+    <a href="#onchain">On-chain</a><a href="#evaluation">Evaluation</a><a href="#limits">Limitations</a>
+  </nav>
+
+  <div class="tiles" id="tiles"><p class="loading">Loading data…</p></div>
+
+  <section id="flow" aria-labelledby="flow-h">
+    <h2 id="flow-h">From raw data to anomalies</h2>
+    <p class="muted">Each stage is checked against the one before it: the database load is verified against the raw files with an exact checksum, and Spark's daily counts match ClickHouse's on every day.</p>
+    <div class="card funnel" id="funnel"></div>
+  </section>
+
+  <section id="explore" aria-labelledby="explore-h">
+    <h2 id="explore-h">Explore a coin</h2>
+    <p class="muted">Price and volume for the year, with the days each detector flagged underneath. Hover a dot for why it was flagged. Each method flags its top 1% of all coin-days, so the three are compared on equal terms.</p>
+    <div class="card">
+      <div class="controls">
+        <label class="small muted" for="coin-search">Coin</label>
+        <input type="search" id="coin-search" list="coin-list" placeholder="Search by name or symbol" autocomplete="off">
+        <datalist id="coin-list"></datalist>
+        <div class="controls" id="quick-picks" aria-label="Quick picks"></div>
+        <div class="seg" role="group" aria-label="Price scale">
+          <button type="button" id="scale-lin" aria-pressed="false">Linear</button>
+          <button type="button" id="scale-log" aria-pressed="true">Log</button>
+        </div>
+      </div>
+      <div>
+        <h3 id="coin-title"></h3>
+        <p class="small muted" id="coin-sub"></p>
+      </div>
+      <div class="legend" id="method-legend"></div>
+      <div class="chart h-260"><canvas id="c-price" aria-label="Price over the year"></canvas></div>
+      <div class="chart h-160"><canvas id="c-volume" aria-label="Volume over the year"></canvas></div>
+      <div class="chart h-110"><canvas id="c-flags" aria-label="Days flagged by each method"></canvas></div>
+      <div>
+        <h3>Flagged days</h3>
+        <p class="small muted">Robust z-scores: how unusual the day was against the coin's previous 30 days (median-based, so one past extreme can't distort it).</p>
+      </div>
+      <div class="table-wrap scroll"><table id="t-coin-flags"></table></div>
+    </div>
+  </section>
+
+  <section id="quality" aria-labelledby="quality-h">
+    <h2 id="quality-h">Data quality: the biggest “anomalies” were data errors</h2>
+    <p class="muted">Before any modelling, the largest moves in the raw data turned out to be broken price feeds. Each example below was caught, explained and removed by a rule. The raw data itself is never modified.</p>
+    <div class="tiles" id="quality-tiles"></div>
+    <div class="grid-3" id="quality-cards"></div>
+  </section>
+
+  <section id="market" aria-labelledby="market-h">
+    <h2 id="market-h">Market-wide moves</h2>
+    <p class="muted">The daily return of the median coin, scored the same robust way. A crash that hits every coin at once is a market event, not a coin-specific one, so it shows here. The largest move of the year was found by the data and only afterwards matched to a documented rally.</p>
+    <div class="card">
+      <div class="chart h-200"><canvas id="c-market" aria-label="Market return robust z-score"></canvas></div>
+      <p class="small muted">Marked: <strong>5 Feb 2026</strong>, the February crash (record liquidations; median coin −12.4%, z −9.8). <strong>21 Aug 2026</strong>, the largest move of the year (z +12.3): a documented rally with $1.48B in short liquidations, after US Treasury buybacks and a White House crypto summit.</p>
+    </div>
+  </section>
+
+  <section id="models" aria-labelledby="models-h">
+    <h2 id="models-h">Model comparison</h2>
+    <p class="muted">All three detectors see the same four features per coin-day: return, volume, turnover and market-adjusted return, each as a robust z-score. They're compared at an equal alert budget, each flagging its top 1%.</p>
+    <div class="grid-2">
+      <div class="card">
+        <h3>How much do their flags overlap?</h3>
+        <p class="small muted">Jaccard overlap: 1.0 means identical flag sets, 0 means no days in common.</p>
+        <div class="table-wrap"><table class="matrix" id="t-jaccard"></table></div>
+        <div class="tiles" id="model-tiles"></div>
+      </div>
+      <div class="card">
+        <h3>What kind of anomaly does each one catch?</h3>
+        <p class="small muted">Share of each method's flags by type. “Multivariate only” means no single feature was extreme, only the combination.</p>
+        <div class="legend" id="types-legend"></div>
+        <div class="chart h-300"><canvas id="c-types" aria-label="Share of flags by anomaly type"></canvas></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Takeaways</h3>
+      <ul class="plain">
+        <li><strong>z-score and Isolation Forest mostly agree</strong> on real data. Crypto's fat tails fill the 1% budget with huge outliers: a day needs a robust |z| of at least <span id="cutoff"></span> to make it.</li>
+        <li><strong>LOF sees something different</strong>: local and multivariate anomalies, such as a turnover jump with flat volume because market cap fell.</li>
+        <li><strong>Agreement is the strongest signal.</strong> Days flagged by 2+ methods are listed below. Click a row to open that coin above.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="controls">
+        <h3 style="margin-right:auto">Days flagged by 2 or more methods</h3>
+        <label class="small muted" for="f-type">Type</label>
+        <select id="f-type"><option value="">All types</option></select>
+        <label class="small muted" for="f-votes">Agreement</label>
+        <select id="f-votes"><option value="2">2+ methods</option><option value="3">All 3</option></select>
+      </div>
+      <div class="table-wrap scroll"><table id="t-top"></table></div>
+      <p class="small muted" id="top-count"></p>
+    </div>
+  </section>
+
+  <section id="wash" aria-labelledby="wash-h">
+    <h2 id="wash-h">Wash-trading candidates</h2>
+    <p class="muted">Wash trading inflates volume without the price movement real buying and selling would cause. Two screens look for that shape. Candidates are leads, not verdicts: only Celer Network was checked against an outside source.</p>
+    <div class="card callout-card">
+      <div class="callout">
+        <h3>Celer Network, 3 June 2026: $1.5B traded on an $18M coin</h3>
+        <p>That's 82 times the coin's entire market cap in one day, with the price flat, then $487M, then back to about $2M. <strong>An independent aggregator (CoinRanking) shows the same: $1.5B, then $513M.</strong> So it isn't one data provider's glitch; exchanges really reported that volume. Trading of that size with no price impact can't be genuine demand for an $18M coin. It's consistent with wash trading or fake exchange-reported volume.</p>
+        <p class="small"><button class="chip" type="button" data-open="celer-network">Open Celer Network in the explorer</button></p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Volume spike, price calm (2+ methods agree)</h3>
+        <p class="small muted">Largest volume first. Robust z: how unusual vs the coin's previous 30 days.</p>
+        <div class="table-wrap scroll"><table id="t-wash"></table></div>
+      </div>
+      <div class="card">
+        <h3>“Impossible turnover”</h3>
+        <p class="small muted">Days when volume exceeded 5x the coin's entire market cap while the price moved under 5%. Typical daily turnover is <span id="med-turn"></span>. Pegged assets (stablecoins, tokenized treasuries) are excluded, since their price is flat by design.</p>
+        <div class="tiles" id="turnover-tiles"></div>
+        <div class="table-wrap scroll"><table id="t-turnover"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="onchain" aria-labelledby="onchain-h">
+    <h2 id="onchain-h">On-chain: three tokens, every transfer</h2>
+    <p class="muted">LINK (steady large-cap), PEPE (memecoin) and LOOKS (a token with a documented wash-trading history), over 90 days. The key lesson: most back-and-forth trading is infrastructure. DEX pools, routers and bots trade with everyone, so round trips are only counted between ordinary wallets, after labelling 13,204 addresses.</p>
+    <div class="tiles" id="contract-tiles"></div>
+    <div class="card">
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Token" id="token-seg"></div>
+        <span class="small muted" id="token-sub"></span>
+      </div>
+      <div class="grid-2">
+        <div><h3>Transfers per day</h3><div class="chart h-200"><canvas id="c-transfers"></canvas></div></div>
+        <div><h3>Unique addresses per day</h3><div class="chart h-200"><canvas id="c-addresses"></canvas></div></div>
+      </div>
+      <div class="grid-2">
+        <div><h3>Wallet-to-wallet round trips</h3><p class="small muted">Share of transfers where the receiver had sent to the sender within 7 days.</p><div class="chart h-200"><canvas id="c-rt"></canvas></div></div>
+        <div><h3>Days flagged by each method</h3><p class="small muted">Small sample (about 88 days per token): treat as illustrative.</p><div class="chart h-200"><canvas id="c-token-flags"></canvas></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="evaluation" aria-labelledby="evaluation-h">
+    <h2 id="evaluation-h">Evaluation: planted anomalies and real events</h2>
+    <p class="muted">There's no answer key for crypto anomalies, so we used two tests. <strong>Synthetic injection:</strong> 887 anomalies we created ourselves (one per coin), planted in the raw data at a range of strengths, measured in each coin's own volatility. <strong>Backtest:</strong> real, independently documented events.</p>
+    <div class="card">
+      <div class="controls">
+        <h3 style="margin-right:auto">Share of planted anomalies caught (recall at a 1% alert budget)</h3>
+        <div class="seg" role="group" aria-label="Anomaly type" id="inj-seg"></div>
+      </div>
+      <div class="legend" id="inj-legend"></div>
+      <div class="chart h-260"><canvas id="c-injection" aria-label="Recall by strength"></canvas></div>
+      <p class="small muted" id="inj-note"></p>
+    </div>
+    <div class="grid-3" id="backtest-cards"></div>
+  </section>
+
+  <section id="limits" aria-labelledby="limits-h">
+    <h2 id="limits-h">Limitations</h2>
+    <div class="card">
+      <ul class="plain">
+        <li><strong>Survivorship bias:</strong> the coin universe is today's top 1,000, which excludes coins that collapsed during the year. The backtest's event coins had to be added separately.</li>
+        <li><strong>Exploits that don't move the token's price are invisible</strong> to market-data detectors (Kelp DAO). On-chain protocol outflows would be needed.</li>
+        <li><strong>Small anomalies go undetected:</strong> below about 12σ, crypto's own extreme days use up the 1% alert budget.</li>
+        <li><strong>Smart-contract wallets</strong> (Safe, ERC-4337) are labelled as contracts, so wash trading routed through them would be missed.</li>
+        <li><strong>The on-chain sample is small:</strong> 3 tokens over 90 days.</li>
+        <li><strong>Candidates are not verdicts.</strong> Only Celer Network was confirmed with a second source.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <span>Data: CoinGecko (market), Etherscan V2 (transfers, contract labels). Daily rows are the close of each UTC day.</span>
+    <span id="generated"></span>
+    <span>Pipeline: ClickHouse · PySpark · scikit-learn. Every number here is exported by <code>scripts/build_dashboard.py</code> from the analysis database.</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const METHOD_NAMES = { zscore: "z-score", iforest: "Isolation Forest", lof: "LOF" };
+  const TYPE_NAMES = { volume_only: "Volume only", price_and_vol: "Price and volume", price_shock: "Price shock",
+                       other_feature: "Other feature", multivariate: "Multivariate only" };
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const mColor = (m) => css(`--m-${m}`);
+  const fmtInt = (n) => n == null ? "–" : Math.round(n).toLocaleString("en-US");
+  const fmtUsd = (v) => {
+    if (v == null) return "–";
+    const a = Math.abs(v);
+    if (a >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+    if (a >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+    if (a >= 1) return `$${v.toFixed(2)}`;
+    return `$${v.toPrecision(3)}`;
+  };
+  const fmtZ = (z) => z == null ? "–" : (z > 0 ? "+" : "") + Number(z).toFixed(1);
+  const fmtPct = (x, d = 1) => x == null ? "–" : `${(x * 100).toFixed(d)}%`;
+  const fmtDate = (iso) => new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const el = (sel) => document.querySelector(sel);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const dots = (methods) => `<span class="dots">${methods.map((m) => `<span class="key" title="${METHOD_NAMES[m]}" style="background:${mColor(m)}"></span>`).join("")}</span> <span class="small muted">${methods.map((m) => METHOD_NAMES[m]).join(", ")}</span>`;
+
+  let D, charts = {}, state = { coin: "celer-network", log: true, token: "LINK", injType: "all" };
+  // listeners are attached once; theme changes re-run the render functions, which must not re-wire them
+  const wired = new Set();
+  const wire = (key, fn) => { if (!wired.has(key)) { wired.add(key); fn(); } };
+
+  // ---------- chart helpers ----------
+  const AXIS_W = 64;
+  function monthTicks(dates) {
+    const out = [];
+    dates.forEach((d, i) => { if (d.endsWith("-01")) out.push(i); });
+    return out;
+  }
+  function monthLabel(iso) {
+    const d = new Date(iso + "T00:00:00Z");
+    const m = d.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+    return d.getUTCMonth() === 0 ? `${m} ${String(d.getUTCFullYear()).slice(2)}` : m;
+  }
+  function xAxis(dates, show = true, every = 1) {
+    const ticks = monthTicks(dates).filter((_, k) => k % every === 0);
+    return {
+      type: "linear", min: 0, max: dates.length - 1, grid: { color: css("--grid"), drawTicks: false },
+      border: { color: css("--axis") },
+      afterBuildTicks: (axis) => { axis.ticks = ticks.map((v) => ({ value: v })); },
+      ticks: { display: show, color: css("--muted"), font: { size: 11 }, autoSkip: false, maxRotation: 0,
+               callback: (v) => monthLabel(dates[v]) },
+    };
+  }
+  function yAxis(opts = {}) {
+    return {
+      type: opts.log ? "logarithmic" : "linear",
+      grid: { color: css("--grid"), drawTicks: false }, border: { display: false },
+      afterFit: (axis) => { axis.width = AXIS_W; },
+      ticks: { color: css("--muted"), font: { size: 11 }, maxTicksLimit: 5, callback: opts.fmt || ((v) => v), padding: 6 },
+      beginAtZero: !!opts.zero, min: opts.min, max: opts.max,
+    };
+  }
+  function tooltip(extra = {}) {
+    return {
+      backgroundColor: css("--surface"), borderColor: css("--axis"), borderWidth: 1,
+      titleColor: css("--ink"), bodyColor: css("--ink-2"), padding: 10, cornerRadius: 8,
+      titleFont: { weight: "600" }, displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true, ...extra,
+    };
+  }
+  // vertical event markers: options.plugins.markers = [{ x, label }]
+  const markerPlugin = {
+    id: "markers",
+    afterDatasetsDraw(chart, args, opts) {
+      if (!opts || !opts.items) return;
+      const { ctx, chartArea: a, scales: { x } } = chart;
+      ctx.save();
+      opts.items.forEach((m) => {
+        const px = x.getPixelForValue(m.x);
+        if (px < a.left || px > a.right) return;
+        ctx.strokeStyle = css("--ink-2"); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+        if (m.label) {
+          ctx.fillStyle = css("--ink-2"); ctx.font = "600 11px " + css("--sans");
+          const w = ctx.measureText(m.label).width;
+          const left = px + 6 + w > a.right ? px - 6 - w : px + 6;
+          ctx.fillText(m.label, left, a.top + 12);
+        }
+      });
+      ctx.restore();
+    },
+  };
+  Chart.register(markerPlugin);
+  function make(id, config) {
+    if (charts[id]) charts[id].destroy();
+    Chart.defaults.font.family = css("--sans");
+    Chart.defaults.color = css("--muted");
+    config.options = Object.assign({ responsive: true, maintainAspectRatio: false, animation: false,
+                                     interaction: { mode: "index", intersect: false } }, config.options);
+    charts[id] = new Chart(document.getElementById(id), config);
+    return charts[id];
+  }
+  const lineSet = (label, values, color, extra = {}) => ({
+    label, data: values.map((v, i) => ({ x: i, y: v })), borderColor: color, backgroundColor: color,
+    borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0, spanGaps: false, borderJoinStyle: "round", ...extra,
+  });
+  const withAlpha = (hex, a) => {
+    const h = hex.replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
+
+  // ---------- header, tiles, funnel ----------
+  function renderSummary() {
+    const t = D.totals;
+    el("#window").textContent = `Market window ${fmtDate(D.window[0])} – ${fmtDate(D.window[1])}`;
+    el("#generated").textContent = `Data exported ${fmtDate(D.generated)}.`;
+    el("#cutoff").textContent = t.cutoff_z;
+    const tiles = [
+      ["Coins tracked", fmtInt(t.coins), `${fmtInt(t.market_rows)} daily rows`],
+      ["On-chain transfers", `${(t.transfers / 1e6).toFixed(2)}M`, `${fmtInt(t.addresses)} addresses`],
+      ["Coin-days scored", fmtInt(t.modelled_rows), `${t.modelled_coins} coins after cleaning`],
+      ["Flagged by 2+ methods", fmtInt(t.votes2), `${fmtInt(t.votes3)} by all three`],
+      ["Extreme days", fmtPct(t.fat_tail_share), "beyond |z| = 3 (normal curve: 0.27%)"],
+    ];
+    el("#tiles").innerHTML = tiles.map(([l, v, n]) => `<div class="tile"><span class="label">${l}</span><span class="value">${v}</span><span class="note">${n}</span></div>`).join("");
+    const q = D.quality.status;
+    const market = [
+      [fmtInt(t.coins) + " coins", "CoinGecko, daily, 1 year"],
+      [fmtInt(t.clean_coins) + " clean", `${q.feed_glitch} glitchy feeds and ${q.stale_feed} dead feeds removed; ${fmtInt(D.quality.volume_glitches[0])} volume collapses dropped`],
+      [fmtInt(t.modelled_rows) + " coin-days", "robust z-scores: return, volume, turnover, market-adjusted return"],
+      [fmtInt(t.flags_per_method) + " each", "every method flags its top 1%"],
+      [fmtInt(t.votes2) + " agreed", `2+ methods; ${fmtInt(t.votes3)} all three`],
+    ];
+    const chain = [
+      [`${(t.transfers / 1e6).toFixed(2)}M transfers`, "Etherscan, LINK / PEPE / LOOKS, 90 days"],
+      [fmtInt(t.addresses) + " addresses", "senders and receivers"],
+      [fmtInt(t.labelled) + " labelled", "every address in a back-and-forth pair"],
+      [fmtInt(t.contracts) + " contracts", "pools, routers, bots: excluded from round trips"],
+      ["≈1% round trips", "wallet-to-wallet, the wash-trading signal"],
+    ];
+    const flow = (rows) => rows.map(([n, tx], i) => `${i ? '<span class="arrow" aria-hidden="true">→</span>' : ""}<div class="stage"><span class="n">${n}</span><span class="t">${tx}</span></div>`).join("");
+    el("#funnel").innerHTML = `<span class="flow-label">Market data</span><div class="flow">${flow(market)}</div>
+      <span class="flow-label">On-chain data</span><div class="flow">${flow(chain)}</div>`;
+    el("#method-legend").innerHTML = D.methods.map((m) => `<span><i class="key" style="background:${mColor(m)}"></i>${METHOD_NAMES[m]}</span>`).join("") +
+      `<span><i class="key line" style="background:${css("--ink-2")}"></i>Price / volume</span>`;
+  }
+
+  // ---------- coin explorer ----------
+  function coinById(id) { return D.coins.find((c) => c.id === id); }
+  function renderCoin() {
+    const c = coinById(state.coin);
+    if (!c) return;
+    el("#coin-title").textContent = `${c.name} (${c.symbol})`;
+    const nFlags = Object.values(c.detail).length;
+    el("#coin-sub").textContent = `${c.rank ? `Market-cap rank #${c.rank} · ` : ""}${nFlags} flagged day${nFlags === 1 ? "" : "s"} · ` +
+      D.methods.map((m) => `${METHOD_NAMES[m]} ${c.flags[m].length}`).join(" · ");
+    const days = D.days;
+    const ink = css("--ink-2");
+    make("c-price", {
+      type: "line",
+      data: { datasets: [lineSet("Price", c.price, ink)] },
+      options: {
+        scales: { x: xAxis(days, false), y: yAxis({ log: state.log, fmt: (v) => fmtUsd(v) }) },
+        plugins: { legend: { display: false },
+                   tooltip: tooltip({ displayColors: false, callbacks: { title: (it) => fmtDate(days[it[0].parsed.x]), label: (it) => `Price ${fmtUsd(it.parsed.y)}` } }) },
+      },
+    });
+    make("c-volume", {
+      type: "line",
+      data: { datasets: [lineSet("Volume", c.volume, ink, { fill: "origin", backgroundColor: withAlpha(ink.startsWith("#") ? ink : "#52514e", 0.1) })] },
+      options: {
+        scales: { x: xAxis(days, false), y: yAxis({ log: state.log, fmt: (v) => fmtUsd(v) }) },
+        plugins: { legend: { display: false },
+                   tooltip: tooltip({ displayColors: false, callbacks: { title: (it) => fmtDate(days[it[0].parsed.x]), label: (it) => `Volume ${fmtUsd(it.parsed.y)}` } }) },
+      },
+    });
+    const surface = css("--surface");
+    make("c-flags", {
+      type: "scatter",
+      data: { datasets: D.methods.map((m, row) => ({
+        label: METHOD_NAMES[m], data: c.flags[m].map((i) => ({ x: i, y: 2 - row })),
+        backgroundColor: mColor(m), borderColor: surface, borderWidth: 2, pointRadius: 5, pointHoverRadius: 7, pointHitRadius: 8,
+      })) },
+      options: {
+        interaction: { mode: "nearest", intersect: true },
+        scales: {
+          x: xAxis(days, true),
+          y: { min: -0.6, max: 2.6, grid: { display: false }, border: { display: false },
+               afterFit: (a) => { a.width = AXIS_W; },
+               afterBuildTicks: (a) => { a.ticks = [0, 1, 2].map((v) => ({ value: v })); },
+               ticks: { color: css("--ink-2"), font: { size: 11 }, callback: (v) => METHOD_NAMES[D.methods[2 - v]] } },
+        },
+        plugins: { legend: { display: false }, tooltip: tooltip({
+          callbacks: {
+            title: (it) => fmtDate(days[it[0].parsed.x]),
+            label: (it) => {
+              const d = c.detail[String(it.parsed.x)];
+              return d ? [`${it.dataset.label} flagged · ${TYPE_NAMES[d[4]]} · ${d[5]} of 3 agree`,
+                          `return z ${fmtZ(d[0])}  volume z ${fmtZ(d[1])}  turnover z ${fmtZ(d[2])}  residual z ${fmtZ(d[3])}`] : it.dataset.label;
+            },
+          } }) },
+      },
+    });
+    const rows = Object.entries(c.detail).map(([i, d]) => ({ i: +i, d })).sort((a, b) => b.d[5] - a.d[5] || a.i - b.i);
+    el("#t-coin-flags").innerHTML = `<thead><tr><th>Date</th><th>Type</th><th>Flagged by</th><th class="num">Return z</th><th class="num">Volume z</th><th class="num">Turnover z</th><th class="num">Residual z</th><th class="num">Volume</th></tr></thead><tbody>` +
+      (rows.length ? rows.map(({ i, d }) => `<tr><td>${fmtDate(days[i])}</td><td>${TYPE_NAMES[d[4]]}</td><td>${dots(D.methods.filter((m) => c.flags[m].includes(i)))}</td><td class="num">${fmtZ(d[0])}</td><td class="num">${fmtZ(d[1])}</td><td class="num">${fmtZ(d[2])}</td><td class="num">${fmtZ(d[3])}</td><td class="num">${fmtUsd(c.volume[i])}</td></tr>`).join("")
+        : `<tr><td colspan="8" class="muted">No day of this coin made any method's top 1%.</td></tr>`) + "</tbody>";
+  }
+  function setCoin(id, scroll) {
+    if (!coinById(id)) return;
+    state.coin = id;
+    const c = coinById(id);
+    el("#coin-search").value = `${c.name} (${c.symbol})`;
+    renderCoin();
+    if (scroll) document.getElementById("explore").scrollIntoView({ behavior: "smooth" });
+  }
+  function setupExplorer() {
+    el("#coin-list").innerHTML = D.coins.map((c) => `<option value="${esc(c.name)} (${esc(c.symbol)})"></option>`).join("");
+    el("#coin-search").addEventListener("change", (e) => {
+      const v = e.target.value.toLowerCase();
+      const hit = D.coins.find((c) => `${c.name} (${c.symbol})`.toLowerCase() === v) ||
+                  D.coins.find((c) => c.symbol.toLowerCase() === v || c.name.toLowerCase().includes(v) || c.id === v);
+      if (hit) setCoin(hit.id);
+    });
+    const picks = [["celer-network", "Celer"], ["bitcoin", "Bitcoin"], ["pyth-network", "Pyth"], ["wojak-5", "Wojak"], ["handy", "Handy"]]
+      .filter(([id]) => coinById(id));
+    el("#quick-picks").innerHTML = picks.map(([id, n]) => `<button class="chip" type="button" data-open="${id}">${n}</button>`).join("");
+    const setScale = (log) => { state.log = log; el("#scale-log").setAttribute("aria-pressed", log); el("#scale-lin").setAttribute("aria-pressed", !log); renderCoin(); };
+    el("#scale-log").addEventListener("click", () => setScale(true));
+    el("#scale-lin").addEventListener("click", () => setScale(false));
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-open]");
+      if (b) setCoin(b.dataset.open, b.closest("#explore") == null);
+    });
+  }
+
+  // ---------- data quality ----------
+  function renderQuality() {
+    const q = D.quality;
+    el("#quality-tiles").innerHTML = [
+      ["Clean coins", fmtInt(q.status.ok), "used for modelling"],
+      ["Feed glitches", fmtInt(q.status.feed_glitch), "coins with repeated >10x jumps"],
+      ["Dead feeds", fmtInt(q.status.stale_feed), "zero volume on >20% of days"],
+      ["Volume collapses", fmtInt(q.volume_glitches[0]), `one-day drops across ${q.volume_glitches[1]} coins`],
+    ].map(([l, v, n]) => `<div class="tile"><span class="label">${l}</span><span class="value">${v}</span><span class="note">${n}</span></div>`).join("");
+    const text = {
+      pinksale: "Trades around $200, but some days show $0.0032 and then snap back. Each snap-back looks like a +70,000x “return”.",
+      bitmind: "One of several Bittensor subnet tokens whose price jumps about 130x and back, on the same dates as the others: CoinGecko switching between TAO and USD quotes.",
+      bitcoin: "Bitcoin's volume shows $0.38B on 11 March between days of $35–46B, with a smooth price. 921 such one-day collapses are removed; one-day spikes are kept, since they could be real.",
+    };
+    el("#quality-cards").innerHTML = q.examples.map((x) => `<div class="card"><div><h3>${x.id === "bitcoin" ? "Bitcoin" : x.id === "bitmind" ? "BitMind" : "PinkSale"}: ${x.label}</h3><p class="small muted">${text[x.id]}</p></div>
+      <div class="chart h-160"><canvas id="c-q-${x.id}"></canvas></div><span class="small"><span class="key" style="background:${css("--critical")}"></span> flagged by the cleaning rule · status: <span class="pill">${x.status === "ok" ? "kept, bad days removed" : x.status.replace("_", " ")}</span></span></div>`).join("");
+    q.examples.forEach((x) => {
+      const field = x.id === "bitcoin" ? "volume" : "price";
+      const vals = x[field];
+      make(`c-q-${x.id}`, {
+        type: "line",
+        data: { datasets: [
+          lineSet(field === "price" ? "Price" : "Volume", vals, css("--ink-2")),
+          { type: "scatter", label: "Flagged", data: x.marked.map((i) => ({ x: i, y: vals[i] })), backgroundColor: css("--critical"),
+            borderColor: css("--surface"), borderWidth: 2, pointRadius: 5 },
+        ] },
+        options: {
+          interaction: { mode: "nearest", intersect: false, axis: "x" },
+          scales: { x: xAxis(x.dates, true, 3), y: yAxis({ log: true, fmt: fmtUsd }) },
+          plugins: { legend: { display: false }, tooltip: tooltip({ displayColors: false, filter: (it) => it.datasetIndex === 0 || it.dataset.label === "Flagged",
+            callbacks: { title: (it) => fmtDate(x.dates[it[0].parsed.x]), label: (it) => `${it.dataset.label === "Flagged" ? "Flagged · " : ""}${field} ${fmtUsd(it.parsed.y)}` } }) },
+        },
+      });
+    });
+  }
+
+  // ---------- market-wide ----------
+  function renderMarket() {
+    const m = D.market;
+    const idx = (iso) => m.dates.indexOf(iso);
+    make("c-market", {
+      type: "line",
+      data: { datasets: [lineSet("Market return z", m.z, css("--ink-2"))] },
+      options: {
+        scales: { x: xAxis(m.dates, true), y: yAxis({ fmt: (v) => fmtZ(v) }) },
+        plugins: { legend: { display: false },
+                   markers: { items: [{ x: idx("2026-02-05"), label: "Feb crash" }, { x: idx("2026-08-21"), label: "Aug rally" }] },
+                   tooltip: tooltip({ displayColors: false, callbacks: { title: (it) => fmtDate(m.dates[it[0].parsed.x]),
+                     label: (it) => [`robust z ${fmtZ(it.parsed.y)}`, `median coin ${fmtPct(m.ret[it.parsed.x])}`] } }) },
+      },
+    });
+  }
+
+  // ---------- models ----------
+  function renderModels() {
+    const M = D.models, ms = D.methods;
+    const seq = [css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4")];
+    const cell = (v) => {
+      const k = v >= 0.99 ? 3 : v >= 0.5 ? 2 : v >= 0.2 ? 1 : 0;
+      const ink = k >= 2 ? "#ffffff" : css("--ink");
+      return `<td style="background:${seq[k]};color:${ink}">${v.toFixed(2)}</td>`;
+    };
+    el("#t-jaccard").innerHTML = `<thead><tr><th></th>${ms.map((m) => `<th class="num">${METHOD_NAMES[m]}</th>`).join("")}</tr></thead><tbody>` +
+      ms.map((a, i) => `<tr><th>${METHOD_NAMES[a]}</th>${M.jaccard[i].map(cell).join("")}</tr>`).join("") + "</tbody>";
+    el("#model-tiles").innerHTML = ms.map((m) => `<div class="tile"><span class="label"><span class="key" style="background:${mColor(m)}"></span> Only ${METHOD_NAMES[m]}</span><span class="value">${fmtInt(M.only[m])}</span><span class="note">days no other method flagged</span></div>`).join("");
+    el("#types-legend").innerHTML = ms.map((m) => `<span><i class="key" style="background:${mColor(m)}"></i>${METHOD_NAMES[m]}</span>`).join("");
+    make("c-types", {
+      type: "bar",
+      data: { labels: M.types.map((t) => TYPE_NAMES[t]),
+              datasets: ms.map((m) => ({ label: METHOD_NAMES[m], data: M.type_share[m], backgroundColor: mColor(m),
+                                         borderRadius: 4, borderSkipped: "start", maxBarThickness: 14, categoryPercentage: 0.7, barPercentage: 0.9 })) },
+      options: {
+        indexAxis: "y", interaction: { mode: "index", intersect: false },
+        scales: { x: { min: 0, grid: { color: css("--grid") }, border: { display: false }, ticks: { color: css("--muted"), callback: (v) => fmtPct(v, 0) } },
+                  y: { grid: { display: false }, border: { color: css("--axis") }, ticks: { color: css("--ink-2") } } },
+        plugins: { legend: { display: false }, tooltip: tooltip({ callbacks: { label: (it) => `${it.dataset.label}: ${fmtPct(it.parsed.x)}` } }) },
+      },
+    });
+    el("#f-type").innerHTML = `<option value="">All types</option>` + M.types.map((t) => `<option value="${t}">${TYPE_NAMES[t]}</option>`).join("");
+    const draw = () => {
+      const type = el("#f-type").value, votes = +el("#f-votes").value;
+      // agreement first, then dollar volume: sorting by z-score size surfaced residual data glitches first
+      const rows = M.top.filter((r) => (!type || r[2] === type) && r[3] >= votes)
+        .sort((a, b) => b[3] - a[3] || (b[7] || 0) - (a[7] || 0));
+      el("#t-top").innerHTML = `<thead><tr><th>Coin</th><th>Date</th><th>Type</th><th>Flagged by</th><th class="num">Return z</th><th class="num">Volume z</th><th class="num">Volume</th></tr></thead><tbody>` +
+        rows.slice(0, 150).map((r) => `<tr class="${coinById(r[0]) ? "clickable" : ""}" ${coinById(r[0]) ? `data-open="${r[0]}" tabindex="0"` : ""}><td class="mono">${esc(r[0])}</td><td>${fmtDate(r[1])}</td><td>${TYPE_NAMES[r[2]]}</td><td>${dots(r[4])}</td><td class="num">${fmtZ(r[5])}</td><td class="num">${fmtZ(r[6])}</td><td class="num">${fmtUsd(r[7])}</td></tr>`).join("") + "</tbody>";
+      el("#top-count").textContent = `${rows.length.toLocaleString()} of the ${M.top.length} strongest agreed days shown (sorted by agreement, then dollar volume); ${fmtInt(D.totals.votes2)} days have 2+ votes in total. Rows for coins in the explorer open it on click.`;
+    };
+    wire("top-filters", () => { el("#f-type").addEventListener("change", draw); el("#f-votes").addEventListener("change", draw); });
+    draw();
+  }
+
+  // ---------- wash trading ----------
+  function renderWash() {
+    const W = D.wash;
+    el("#med-turn").textContent = fmtPct(D.totals.median_turnover) + " of market cap";
+    el("#t-wash").innerHTML = `<thead><tr><th>Coin</th><th>Date</th><th class="num">Volume</th><th class="num">Market cap</th><th class="num">Volume z</th><th class="num">Return z</th><th>Flagged by</th></tr></thead><tbody>` +
+      W.consensus.map((r) => `<tr class="${coinById(r[0]) ? "clickable" : ""}" ${coinById(r[0]) ? `data-open="${r[0]}" tabindex="0"` : ""}><td class="mono">${esc(r[0])}</td><td>${fmtDate(r[1])}</td><td class="num">${fmtUsd(r[2])}</td><td class="num">${fmtUsd(r[3])}</td><td class="num">${fmtZ(r[4])}</td><td class="num">${fmtZ(r[5])}</td><td>${dots(r[6])}</td></tr>`).join("") + "</tbody>";
+    const s = W.turnover_summary;
+    el("#turnover-tiles").innerHTML = [["1", "> 1x market cap"], ["5", "> 5x"], ["10", "> 10x"]].map(([k, l]) =>
+      `<div class="tile"><span class="label">${l}</span><span class="value">${fmtInt(s[k][0])}</span><span class="note">days, ${s[k][1]} coins</span></div>`).join("");
+    el("#t-turnover").innerHTML = `<thead><tr><th>Coin</th><th>Date</th><th class="num">Volume</th><th class="num">Market cap</th><th class="num">Volume ÷ cap</th><th class="num">Price move</th></tr></thead><tbody>` +
+      W.turnover.map((r) => `<tr class="${coinById(r[0]) ? "clickable" : ""}" ${coinById(r[0]) ? `data-open="${r[0]}" tabindex="0"` : ""}><td class="mono">${esc(r[0])}</td><td>${fmtDate(r[1])}</td><td class="num">${fmtUsd(r[2])}</td><td class="num">${fmtUsd(r[3])}</td><td class="num">${r[4].toFixed(0)}x</td><td class="num">${fmtPct(r[5])}</td></tr>`).join("") + "</tbody>";
+  }
+
+  // ---------- on-chain ----------
+  function renderOnchain() {
+    const O = D.onchain;
+    const totals = Object.fromEntries(O.totals.map((r) => [r[0], r]));
+    el("#contract-tiles").innerHTML = O.contracts.map(([tok, pairs, tr, trc]) =>
+      `<div class="tile"><span class="label">${tok}: back-and-forth involving a contract</span><span class="value">${fmtPct(trc / tr, 0)}</span><span class="note">of ${fmtInt(tr)} transfers in ${fmtInt(pairs)} pairs</span></div>`).join("");
+    const tokens = Object.keys(O.tokens);
+    el("#token-seg").innerHTML = tokens.map((t) => `<button type="button" data-token="${t}" aria-pressed="${t === state.token}">${t}</button>`).join("");
+    wire("token-seg", () => el("#token-seg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-token]");
+      if (!b) return;
+      state.token = b.dataset.token;
+      el("#token-seg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.token === state.token));
+      drawTokenRef();
+    }));
+    const drawToken = () => {
+      const T = O.tokens[state.token];
+      const tt = totals[state.token];
+      el("#token-sub").textContent = `${fmtInt(tt[1])} transfers · ${fmtInt(tt[2])} addresses · ${T.days.length} full days`;
+      const ink = css("--ink-2");
+      const simple = (id, values, fmt, label) => make(id, {
+        type: "line", data: { datasets: [lineSet(label, values, ink)] },
+        options: { scales: { x: xAxis(T.days, true), y: yAxis({ fmt, zero: true }) },
+                   plugins: { legend: { display: false }, tooltip: tooltip({ displayColors: false, callbacks: {
+                     title: (it) => fmtDate(T.days[it[0].parsed.x]), label: (it) => `${label} ${fmt(it.parsed.y)}` } }) } },
+      });
+      simple("c-transfers", T.transfers, fmtInt, "Transfers");
+      simple("c-addresses", T.unique_addresses, fmtInt, "Addresses");
+      simple("c-rt", T.rt_share, (v) => fmtPct(v, 1), "Round trips");
+      const surface = css("--surface");
+      make("c-token-flags", {
+        type: "scatter",
+        data: { datasets: D.methods.map((m, row) => ({ label: METHOD_NAMES[m],
+          data: T.flags[m].map((d) => ({ x: T.days.indexOf(d), y: 2 - row })).filter((p) => p.x >= 0),
+          backgroundColor: mColor(m), borderColor: surface, borderWidth: 2, pointRadius: 6, pointHoverRadius: 8, pointHitRadius: 8 })) },
+        options: {
+          interaction: { mode: "nearest", intersect: true },
+          scales: { x: xAxis(T.days, true),
+                    y: { min: -0.6, max: 2.6, grid: { display: false }, border: { display: false }, afterFit: (a) => { a.width = AXIS_W; },
+                         afterBuildTicks: (a) => { a.ticks = [0, 1, 2].map((v) => ({ value: v })); },
+                         ticks: { color: css("--ink-2"), font: { size: 11 }, callback: (v) => METHOD_NAMES[D.methods[2 - v]] } } },
+          plugins: { legend: { display: false }, tooltip: tooltip({ callbacks: {
+            title: (it) => fmtDate(T.days[it[0].parsed.x]),
+            label: (it) => { const i = it.parsed.x; return [`${it.dataset.label} flagged`, `${fmtInt(T.transfers[i])} transfers · ${fmtInt(T.unique_addresses[i])} addresses · round trips ${fmtPct(T.rt_share[i])}`]; } } }) },
+        },
+      });
+    };
+    drawTokenRef = drawToken;
+    drawToken();
+  }
+  let drawTokenRef = () => {};
+
+  // ---------- evaluation ----------
+  let drawInjRef = () => {};
+  function renderEvaluation() {
+    const E = D.evaluation;
+    const types = [["all", "All types"], ["price_spike", "Price spike"], ["volume_spike", "Volume spike"], ["combo", "Combination"]];
+    el("#inj-seg").innerHTML = types.map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === state.injType}">${l}</button>`).join("");
+    el("#inj-legend").innerHTML = D.methods.map((m) => `<span><i class="key line" style="background:${mColor(m)}"></i>${METHOD_NAMES[m]}</span>`).join("") +
+      `<span><i class="key line" style="background:${css("--ink-2")}"></i>2+ methods agree</span>`;
+    const notes = {
+      all: "Below about 12σ every method catches only a few percent: crypto's own extreme days fill the 1% budget first.",
+      price_spike: "Single-feature spikes: the z-score and Isolation Forest perform almost identically.",
+      volume_spike: "The wash-trading shape: the z-score is strongest at 12σ (41% vs Isolation Forest's 25%).",
+      combo: "A price move on falling volume, each half strength, so neither feature is extreme alone. Isolation Forest's advantage: 43% vs 11% at 12σ, 99% vs 54% at 24σ.",
+    };
+    const draw = () => {
+      const I = E.injection[state.injType];
+      const xs = E.strengths;
+      const ds = D.methods.map((m) => ({ label: METHOD_NAMES[m], data: xs.map((s, i) => ({ x: s, y: I[m][i] })), borderColor: mColor(m), backgroundColor: mColor(m),
+        borderWidth: 2, pointRadius: 4, pointBorderColor: css("--surface"), pointBorderWidth: 2, pointHoverRadius: 6 }));
+      ds.push({ label: "2+ methods agree", data: xs.map((s, i) => ({ x: s, y: I.consensus_2plus[i] })), borderColor: css("--ink-2"), backgroundColor: css("--ink-2"),
+        borderWidth: 2, pointRadius: 3, pointBorderColor: css("--surface"), pointBorderWidth: 2 });
+      make("c-injection", {
+        type: "line", data: { datasets: ds },
+        options: {
+          scales: {
+            x: { type: "logarithmic", min: 2.5, max: 28, grid: { color: css("--grid") }, border: { color: css("--axis") },
+                 afterBuildTicks: (a) => { a.ticks = xs.map((v) => ({ value: v })); },
+                 ticks: { color: css("--muted"), callback: (v) => `${v}σ` }, title: { display: true, text: "Anomaly strength (in the coin's own volatility)", color: css("--muted") } },
+            y: { min: 0, max: 1, grid: { color: css("--grid") }, border: { display: false }, afterFit: (a) => { a.width = AXIS_W; },
+                 ticks: { color: css("--muted"), callback: (v) => fmtPct(v, 0), stepSize: 0.25 } },
+          },
+          plugins: { legend: { display: false }, tooltip: tooltip({ callbacks: { title: (it) => `${it[0].parsed.x}σ planted anomalies`, label: (it) => `${it.dataset.label}: ${fmtPct(it.parsed.y)}` } }) },
+        },
+      });
+      el("#inj-note").textContent = notes[state.injType];
+    };
+    drawInjRef = draw;
+    wire("inj-seg", () => el("#inj-seg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-type]");
+      if (!b) return;
+      state.injType = b.dataset.type;
+      el("#inj-seg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.type === state.injType));
+      drawInjRef();
+    }));
+    draw();
+
+    const ev = Object.fromEntries(E.events.map((e) => [e.id, e]));
+    const cards = [
+      { id: "resolv-usr", title: "Resolv USR depeg · 22 Mar 2026", status: ["good", "✓", "Caught by all three"],
+        text: "About 80M unbacked USR were minted in an exploit. USR fell 69.1% on exactly the documented date, on volume about 100x normal. Robust z: 234.6." },
+      { id: "kelp-dao-restaked-eth", title: "Kelp DAO hack · 19 Apr 2026", status: ["bad", "✕", "Missed by all three"],
+        text: "About $293M was drained, the largest DeFi exploit of 2026. But rsETH's price stayed close to ETH's, so price and volume data can't see it. On-chain protocol flows would be needed." },
+      { id: "cacao", title: "Maya Protocol CACAO · 18 Aug 2026", status: ["none", "–", "No data"],
+        text: "The token fell 88.7% after an exploit, but CoinGecko's history for CACAO ends on 18 July, a month earlier. Counted as no data, not as a miss." },
+    ];
+    el("#backtest-cards").innerHTML = cards.map((c) => `<div class="card"><div><h3>${c.title}</h3><span class="status ${c.status[0]}"><i aria-hidden="true">${c.status[1]}</i>${c.status[2]}</span></div>
+      <p class="small muted">${c.text}</p>${ev[c.id] && ev[c.id].dates.length ? `<div class="chart h-120"><canvas id="c-ev-${c.id}"></canvas></div><span class="small muted">Price, 30 days either side of the event</span>` : ""}</div>`).join("");
+    cards.forEach((c) => {
+      const e = ev[c.id];
+      if (!e || !e.dates.length) return;
+      const ticks = [0, Math.floor(e.dates.length / 2), e.dates.length - 1];
+      make(`c-ev-${c.id}`, {
+        type: "line", data: { datasets: [lineSet("Price", e.price, css("--ink-2"))] },
+        options: {
+          scales: { x: { type: "linear", min: 0, max: e.dates.length - 1, grid: { display: false }, border: { color: css("--axis") },
+                         afterBuildTicks: (a) => { a.ticks = ticks.map((v) => ({ value: v })); },
+                         ticks: { color: css("--muted"), font: { size: 10 }, maxRotation: 0, callback: (v) => fmtDate(e.dates[v]).replace(/ \d{4}$/, "") } },
+                    y: yAxis({ fmt: fmtUsd }) },
+          plugins: { legend: { display: false }, markers: { items: [{ x: e.dates.indexOf(e.date) }] },
+                     tooltip: tooltip({ displayColors: false, callbacks: { title: (it) => fmtDate(e.dates[it[0].parsed.x]), label: (it) => `Price ${fmtUsd(it.parsed.y)}` } }) },
+        },
+      });
+    });
+  }
+
+  function renderAll() {
+    renderSummary(); renderCoin(); renderQuality(); renderMarket(); renderModels(); renderWash(); renderOnchain(); renderEvaluation();
+  }
+
+  // canvas colors are read from the CSS tokens at draw time, so a theme change redraws everything
+  // (in place, debounced; never a reload, which could loop if the host re-sets the attribute)
+  let lastTheme = null, themeTimer;
+  const onTheme = () => {
+    clearTimeout(themeTimer);
+    themeTimer = setTimeout(() => {
+      const now = document.documentElement.getAttribute("data-theme") + "|" + matchMedia("(prefers-color-scheme: dark)").matches;
+      if (D && now !== lastTheme) { lastTheme = now; renderAll(); }
+    }, 50);
+  };
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", onTheme);
+  new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  fetch("data.json").then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).then((data) => {
+    D = data;
+    lastTheme = document.documentElement.getAttribute("data-theme") + "|" + matchMedia("(prefers-color-scheme: dark)").matches;
+    setupExplorer();
+    renderAll();
+    setCoin(state.coin, false);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target.matches("tr[data-open]")) setCoin(e.target.dataset.open, true);
+    });
+  }).catch((err) => {
+    el("#tiles").innerHTML = `<p>Couldn't load the data file (${esc(err.message)}). If you opened this page from disk, serve the folder instead: <code>python -m http.server</code> in <code>docs/dashboard</code>.</p>`;
+  });
+})();
+</script>
