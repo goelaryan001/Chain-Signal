@@ -102,7 +102,7 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill next">next</span></li>
+      <li class="is-done"><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill done">done</span></li>
     </ol>
   </section>
 
@@ -823,16 +823,78 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </ul>
   </article>
 
-  <section class="next-box" aria-labelledby="next">
-    <span class="eyebrow">Next session</span>
-    <h2 id="next">Phase 6: insights, tests, final README</h2>
-    <ul class="tight">
-      <li>Pull together what the data actually said about crypto anomalies and on-chain activity.</li>
-      <li>Fill any gaps in the tests.</li>
-      <li>Write the final README so it holds up for an interviewer: architecture, why ClickHouse, the three-way comparison, the evaluation method, and the known limitations.</li>
-      <li>Merge the phase branches into <code>main</code>.</li>
-    </ul>
-  </section>
+  <article class="entry" id="phase-6">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 6 · 6 Oct 2026</span>
+      <h2>Insights, regression tests, final README, merge</h2>
+      <div class="stamp"><span>branch <b>phase-6-final</b> → <b>main</b></span><span>commits <b>caa7be2</b> → <b>d156d03</b></span><span>tests <b>55 passing</b></span><span>bugs / corrections <b>2</b></span></div>
+    </div>
+    <p>Goal: turn the work into something that holds up when someone else reads it. Every claim has to be reproducible, every bug has to be guarded against coming back, and the README has to explain the decisions, not just the steps.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Insights as a script, not hand-typed numbers</h3>
+        <p><code>scripts/insights.py</code> computes every headline number in the README from ClickHouse and the Phase 5 result CSVs, and saves the output to <code>docs/results/insights.txt</code>. If the data changes, the numbers change with it, and anyone can check a claim by running one command.</p>
+        <p>It added one new screen, <b>impossible turnover</b>: days when a coin trades many times its entire market cap while the price barely moves. Typical daily turnover is 5.4% of market cap. Excluding pegged assets, <b>29 coin-days across 13 coins</b> traded more than 10x their market cap with the price moving under 5%. Celer's $1.5B day on an $18M coin is one of them.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>A regression test for every bug</h3>
+        <p>Each bug fixed during the build got a test that reproduces its original conditions. Some already existed (Bugs 2, 4, 9 and 10, plus the Phase 4 corrections). New ones cover Bug 1 (a cached 5-coin list must not cap a 20-coin run), Bug 3 (retries recover from errors and report the last cause), Bug 5 (Spark workers use the project's Python), Bug 6 (rate-limit answers are retried, not fatal) and the thread-safe rate limiter.</p>
+        <p class="why"><strong>Testing the test:</strong> Spark sessions are reused across tests, so the first Bug 5 test could have passed even with the bug present, because an earlier test's session already had the right Python. The test now stops any existing session first, and it was <b>run against the original Phase 2 <code>spark.py</code>: it fails there and passes on the fix</b>. A regression test that can't fail protects nothing.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>The final README</h3>
+        <p>Written for someone reading the repo for the first time, such as an interviewer. It opens with the results, then covers the architecture, each design decision with the measurement behind it, the three-way comparison, the evaluation (including the misses), what the data said, the limitations, and how to reproduce everything with one command per stage.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Merged into main</h3>
+        <p>Each phase was built on its own branch, each branched from the one before. All of them were fast-forwarded into <code>main</code>, so main's history keeps every commit, every bug fix and every correction in order.</p>
+      </div></li>
+    </ol>
+
+    <h3>Bugs and corrections in this phase</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Bug 11</td><td>The first insights output showed LINK with <b>2,025,872 transfers</b>, exactly double the verified count. In ClickHouse, <code>arrayJoin</code> in a SELECT turns every row into one row per array element, so <code>count()</code> counted each transfer twice.</td><td>Count addresses with <code>uniqExactArray</code> instead. Counts now match the Phase 2 verification exactly. <code>caa7be2</code></td></tr>
+        <tr><td>Correction</td><td>The stablecoin rule ("price within 2% of $1") missed <b>yield-bearing dollar tokens</b>: Re Protocol reUSD drifts from $1.00 to $1.10, and it topped the "non-stablecoin" list.</td><td>Pegged assets are now identified by what actually matters, low volatility (a median daily move under 0.2%). That catches pegged and yield-bearing stablecoins and tokenized treasuries (101 assets).</td></tr>
+      </tbody>
+    </table></div>
+  </article>
+
+  <article class="entry" id="bug-index">
+    <div class="entry-head">
+      <span class="eyebrow">Project index</span>
+      <h2>Every bug and correction</h2>
+    </div>
+    <p>Ten bugs (numbered 1–11; there is no Bug 8), one environment failure and six corrections across six phases. Several were found phases after they were introduced. The pattern in how they were found is the most useful lesson of the project: <b>almost none showed up in summary statistics</b>. They were caught by reading actual rows, cross-checking against an independent source, or noticing that two numbers that should match didn't.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Introduced</th><th>Found</th><th>Problem</th><th>How it was caught</th></tr></thead>
+      <tbody>
+        <tr><td>Bug 1</td><td>1</td><td>1</td><td>Cached coin list capped bigger runs</td><td>Planning a small trial run</td></tr>
+        <tr><td>Bug 2</td><td>1</td><td>1</td><td>Etherscan V2 has no <code>logIndex</code></td><td>Small live trial before the full pull</td></tr>
+        <tr><td>Bug 3</td><td>1</td><td>1</td><td>Pulls crashed during an API slowdown, without saying why</td><td>Crash log</td></tr>
+        <tr><td>Bug 4</td><td>1</td><td>1</td><td>Pull silently stopped 2 days early</td><td>LOOKS ended 6 Oct; LINK and PEPE ended 4 Oct</td></tr>
+        <tr><td>Env</td><td>0</td><td>1</td><td>Corrupted ClickHouse container after a hung Docker shutdown</td><td>Container failed to start</td></tr>
+        <tr><td>Bug 5</td><td>0</td><td>3</td><td>Spark workers ran Python 3.8</td><td>All Spark tests failed at once</td></tr>
+        <tr><td>Correction</td><td>0</td><td>3</td><td>Phase 0's Spark check never started a Python worker</td><td>Asking why Bug 5 wasn't caught earlier</td></tr>
+        <tr><td>Bug 6</td><td>3</td><td>3</td><td>Labelling crashed on rate limits (requests arriving bunched)</td><td>Crash log</td></tr>
+        <tr><td>Correction</td><td>2</td><td>4</td><td>Cleaning missed volume glitches</td><td>Bitcoin listed as a wash-trading suspect</td></tr>
+        <tr><td>Correction</td><td>3</td><td>4</td><td>Robust z still exploded on stablecoins</td><td>Max robust z of 74,309</td></tr>
+        <tr><td>Bug 7</td><td>4</td><td>4</td><td>Wash-trading list included volume collapses</td><td>Negative volume z on the list</td></tr>
+        <tr><td>Correction</td><td>4</td><td>4</td><td>LOF flagged ordinary days (duplicate points)</td><td>Reading LOF's top flags; a sanity metric</td></tr>
+        <tr><td>Correction</td><td>1</td><td>5</td><td>Survivorship bias in the coin universe</td><td>No event coins in the data</td></tr>
+        <tr><td>Bug 9</td><td>1</td><td>5</td><td>Every market date one day late</td><td>Comparison with CoinRanking</td></tr>
+        <tr><td>Bug 10</td><td>5</td><td>5</td><td>"No data" reported as "missed"</td><td>CACAO's all-NaN output</td></tr>
+        <tr><td>Bug 11</td><td>6</td><td>6</td><td>Transfer counts doubled by <code>arrayJoin</code></td><td>Didn't match the Phase 2 verified count</td></tr>
+        <tr><td>Correction</td><td>6</td><td>6</td><td>Stablecoin rule missed yield-bearing tokens</td><td>reUSD on the non-stablecoin list</td></tr>
+      </tbody>
+    </table></div>
+    <p class="why">Design changes made on evidence, such as the codec choice, the wallet-share feature and the LOF rounding step, are recorded in their phase entries rather than here.</p>
+  </article>
 
   <footer>Repo: Chain-Signal · Source of this page: <code>docs/build-log.html</code></footer>
 </div>
