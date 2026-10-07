@@ -5,8 +5,11 @@
 -- * MergeTree stores each table sorted by ORDER BY. That sort key doubles as a sparse
 --   primary index, so it is chosen to match how the table is queried: one coin over
 --   time, one token over a time window.
--- * Monthly partitions keep parts small and let a reload or retention job drop whole
---   months cheaply. With one year of data that is about 13 partitions, which is fine.
+-- * DAILY partitions on the two raw tables (monthly until Phase 8). The daily incremental
+--   load replaces a day atomically with ALTER TABLE ... REPLACE PARTITION from a staging
+--   table, so re-running a day can never duplicate it. That needs a day to be a partition.
+--   ~365 + ~90 small partitions is fine at this scale; at much larger scale monthly
+--   partitions with a ReplacingMergeTree would be the usual alternative.
 -- * LowCardinality(String) dictionary-encodes columns with few distinct values
 --   (coin ids, token symbols, function names). Addresses (~350k distinct) and tx hashes
 --   are left as plain String because dictionary encoding only pays off below ~10k values.
@@ -38,10 +41,14 @@ CREATE TABLE IF NOT EXISTS market_daily_raw
     date        Date,
     price       Float64,
     market_cap  Nullable(Float64),
-    volume      Float64
+    volume      Float64,
+    -- where the row came from: 'history' (market_chart backfill), 'snapshot' (provisional
+    -- daily /coins/markets snapshot) or 'reconciled' (snapshot day later replaced with the
+    -- authoritative market_chart value by the weekly reconciliation)
+    source      LowCardinality(String) DEFAULT 'history'
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(date)
+PARTITION BY date
 ORDER BY (coin_id, date);
 
 CREATE TABLE IF NOT EXISTS token_transfers_raw
@@ -63,7 +70,7 @@ CREATE TABLE IF NOT EXISTS token_transfers_raw
     function_name  LowCardinality(String)
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(block_time)
+PARTITION BY toDate(block_time)
 ORDER BY (token, block_time, tx_hash, tx_seq);
 
 -- Contract-or-wallet labels for addresses in back-and-forth pairs (Phase 3, Etherscan).

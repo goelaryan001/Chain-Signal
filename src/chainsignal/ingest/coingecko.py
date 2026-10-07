@@ -4,7 +4,7 @@ Demo plan limits (docs, checked 2026-10): 100 calls/min, 10,000 calls/month,
 1 year of daily history. The monthly cap is the real constraint, so every
 per-coin response is cached to disk and never re-fetched.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -109,3 +109,35 @@ def pull_market_data(client: CoinGeckoClient, n_coins: int, raw_dir: Path, days:
         if i % 50 == 0:
             print(f"  coingecko: {i}/{len(coins)} coins ({stats['fetched']} fetched, {stats['cached']} cached)")
     return stats
+
+
+# ---------- daily snapshots (Phase 8) ----------
+# A daily per-coin market_chart update would cost ~1,000 calls/day (30k/month, 3x the
+# Demo budget). /coins/markets returns 250 coins per call, so a snapshot of the whole
+# universe costs 4 calls. Taken shortly after 00:00 UTC on day D, it approximates the
+# close of day D-1, which is what the historical rows hold.
+SNAPSHOT_WINDOW_HOURS = 3
+
+
+def snapshot_day(fetched_at: datetime, window_hours: int = SNAPSHOT_WINDOW_HOURS):
+    """The market day a snapshot stands for: the previous UTC day, if taken soon after midnight."""
+    if fetched_at.tzinfo is None:
+        raise ValueError("fetched_at must be timezone-aware (UTC)")
+    utc = fetched_at.astimezone(timezone.utc)
+    if utc.hour >= window_hours:
+        raise ValueError(f"snapshot taken at {utc:%H:%M} UTC is a mid-day price, not yesterday's close: "
+                         f"take it within {window_hours}h after 00:00 UTC")
+    return (utc - timedelta(days=1)).date()
+
+
+def parse_markets_snapshot(payload: list[dict], day, tracked: set[str] | None = None) -> list[dict]:
+    """Rows shaped like parse_market_chart's, for one day, from a /coins/markets snapshot."""
+    rows = []
+    for c in payload:
+        if tracked is not None and c["id"] not in tracked:
+            continue
+        if c.get("current_price") is None or c.get("total_volume") is None:
+            continue
+        rows.append({"coin_id": c["id"], "date": day.isoformat(), "price": c["current_price"],
+                     "market_cap": c.get("market_cap"), "volume": c["total_volume"]})
+    return rows

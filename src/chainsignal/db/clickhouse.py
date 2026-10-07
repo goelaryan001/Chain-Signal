@@ -13,4 +13,7 @@ def get_client(settings: Settings | None = None) -> Client:
         username=s.clickhouse_user,
         password=s.clickhouse_password,
         database=s.clickhouse_db,
+        # raw tables are partitioned by day, so a full reload's insert blocks span ~365
+        # partitions; ClickHouse refuses more than 100 per insert by default
+        settings={"max_partitions_per_insert_block": 1000},
     )

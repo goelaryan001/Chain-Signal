@@ -10,23 +10,35 @@ import sys
 import time
 
 from chainsignal.db.clickhouse import get_client
-from chainsignal.db.load import load_all, market_rows
+from chainsignal.db.load import later_market_rows, load_all, market_rows
 
 RAW_DIR = Path("data/raw")
 
 
 def file_truth() -> dict:
-    """Recompute counts and checksums straight from the raw files, independent of the loader."""
-    truth = {"market_rows": sum(1 for _ in market_rows(RAW_DIR / "coingecko" / "market_chart")),
+    """Recompute counts and checksums straight from the raw files, independent of the loader.
+
+    Transfers: the base pull plus every daily-update file, deduplicated here by its own
+    (token, hash, txSeq) key with the newest fetch winning, separately from the loader's code.
+    """
+    truth = {"market_rows": sum(1 for _ in market_rows(RAW_DIR / "coingecko" / "market_chart"))
+                            + len(later_market_rows(RAW_DIR)),
              "coins": len(json.loads((RAW_DIR / "coingecko" / "coins_markets.json").read_text())),
              "tokens": {}}
-    for path in sorted((RAW_DIR / "etherscan").glob("*/transfers.jsonl.gz")):
-        rows, value_sum = 0, 0
+    latest = {}
+    sources = [(p.parent.name, p) for p in sorted((RAW_DIR / "etherscan").glob("*/transfers.jsonl.gz"))]
+    sources += [(None, p) for p in sorted((RAW_DIR / "etherscan" / "incremental").glob("*.jsonl.gz"),
+                                          key=lambda p: int(p.name.split("_")[1].split(".")[0]))]
+    for token, path in sources:
         with gzip.open(path, "rt") as f:
             for line in f:
-                rows += 1
-                value_sum += int(json.loads(line)["value"])
-        truth["tokens"][path.parent.name] = {"rows": rows, "value_sum": value_sum}
+                rec = json.loads(line)
+                tok = token or rec["token"]
+                latest[(tok, rec["hash"], int(rec["txSeq"]))] = int(rec["value"])
+    for (tok, _, _), value in latest.items():
+        t = truth["tokens"].setdefault(tok, {"rows": 0, "value_sum": 0})
+        t["rows"] += 1
+        t["value_sum"] += value
     return truth
 
 
