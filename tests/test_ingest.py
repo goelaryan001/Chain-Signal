@@ -15,15 +15,16 @@ def test_parse_market_chart_joins_series_and_drops_partial_day():
         "total_volumes": [[day0, 50.0], [day0 + MS_PER_DAY, 60.0], [day0 + MS_PER_DAY + 3_600_000, 65.0]],
     }
     rows = parse_market_chart("bitcoin", payload)
-    assert [r["date"] for r in rows] == ["2026-01-01", "2026-01-02"]
-    assert rows[1] == {"coin_id": "bitcoin", "date": "2026-01-02", "price": 11.0,
+    # a midnight stamp on day D is day D-1's close
+    assert [r["date"] for r in rows] == ["2025-12-31", "2026-01-01"]
+    assert rows[1] == {"coin_id": "bitcoin", "date": "2026-01-01", "price": 11.0,
                        "market_cap": 1100.0, "volume": 60.0}
 
 
 def test_parse_market_chart_tolerates_missing_series():
     day0 = 1_767_225_600_000
     rows = parse_market_chart("x", {"prices": [[day0, 1.0]], "market_caps": None})
-    assert rows == [{"coin_id": "x", "date": "2026-01-01", "price": 1.0, "market_cap": None, "volume": None}]
+    assert rows == [{"coin_id": "x", "date": "2025-12-31", "price": 1.0, "market_cap": None, "volume": None}]
 
 
 # ---------- Etherscan pagination ----------

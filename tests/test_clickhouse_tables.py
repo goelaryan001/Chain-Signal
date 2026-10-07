@@ -39,6 +39,6 @@ def test_only_window_edge_days_are_partial(q):
 
 
 def test_isolated_volume_collapses_are_flagged_and_excluded(q):
-    # Bitcoin 2026-03-12: $0.38B between days of $35-46B, a feed error found in Phase 4
-    assert q("SELECT volume_glitch FROM market_daily_flagged WHERE coin_id='bitcoin' AND date='2026-03-12'")[0][0]
+    # Bitcoin 2026-03-11 (stamped 03-12): $0.38B between days of $35-46B, a feed error found in Phase 4
+    assert q("SELECT volume_glitch FROM market_daily_flagged WHERE coin_id='bitcoin' AND date='2026-03-11'")[0][0]
     assert q("SELECT countIf(volume_glitch) FROM market_daily_clean")[0][0] == 0

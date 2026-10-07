@@ -57,6 +57,11 @@ def parse_market_chart(coin_id: str, payload: dict) -> list[dict]:
     CoinGecko's daily series has a point at 00:00 UTC for each day plus a
     trailing "now" point mid-day. Only midnight points are complete daily
     snapshots, so the trailing partial point is dropped.
+
+    The point stamped 00:00 UTC on day D carries the close and 24h volume of day
+    D-1, so rows are labelled D-1. (Found in Phase 5: CoinRanking dates Celer's
+    $1.5B volume day 2026-06-03; labelling by the stamp had put it on 06-04, which
+    would misalign every backtest against real event dates.)
     """
     series = {}
     for field, key in (("price", "prices"), ("market_cap", "market_caps"), ("volume", "total_volumes")):
@@ -69,7 +74,7 @@ def parse_market_chart(coin_id: str, payload: dict) -> list[dict]:
         values = series[ts_ms]
         rows.append({
             "coin_id": coin_id,
-            "date": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat(),
+            "date": datetime.fromtimestamp(ts_ms / 1000 - 86_400, tz=timezone.utc).date().isoformat(),
             "price": values.get("price"),
             "market_cap": values.get("market_cap"),
             "volume": values.get("volume"),
