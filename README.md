@@ -17,7 +17,7 @@ The target pattern is **wash trading**: volume that rises without the price move
 | Synthetic recall at a 1% alert budget | 12σ combination anomalies: Isolation Forest **43%**, z-score 11%; 24σ all types: IF 99%, z-score 85%, LOF 17% |
 | Backtest | Resolv USR depeg flagged by all three on the documented date; Kelp DAO hack missed (token price held) |
 | Strongest wash-trading candidate | Celer Network, 2026-06-03: **$1.5B traded on an $18M market cap**, price flat; confirmed by a second aggregator |
-| Tests | 67 (unit, Spark, orchestration, live-database, and one regression test per bug fixed); the 58 that don't need a loaded database run in CI on every push |
+| Tests | 69 pytest tests (60 run in CI) plus 28 dbt data-contract tests on every build |
 
 Every number above is reproduced by `scripts/insights.py` (output in [docs/results/insights.txt](docs/results/insights.txt)).
 
@@ -68,6 +68,15 @@ flowchart LR
 - **Data contracts as asset checks:** unique market and transfer keys, no excluded coin in the clean view, and an exact alert budget per method. A failed feature verification fails the run.
 
 Run it locally: `dagster dev -m chainsignal.orchestration.definitions` (web UI at http://localhost:3000; stop with Ctrl-C), or run one job: `dagster job execute -m chainsignal.orchestration.definitions -j daily_update`.
+
+## Transformation layer (dbt)
+
+The cleaning views and the daily rollup are a **dbt** project ([dbt/](dbt/)): `market_daily_flagged → coin_quality → market_daily_clean` and `token_daily`, reading the raw tables only through declared sources. `dbt build` runs after every load and in the Dagster `transforms` asset; **28 data-contract tests** run with it, and any failure fails the run:
+
+- on the raw sources: unique keys, no missing values, allowed `source` and token values, every market row's coin exists in `coins`;
+- on the models: one verdict per coin, no excluded coin or volume glitch in the clean view, at most one extreme move per kept coin, rollup totals equal raw counts.
+
+The migration was checked as a pure refactor: the dbt models produce row-for-row identical output (same fingerprints) to the hand-run SQL they replaced. Docs and lineage: `cd dbt && dbt docs generate --static`.
 
 ## Design decisions
 
@@ -147,8 +156,8 @@ The project is complete as designed. Five further phases strengthen it for data 
 |---|---|---|---|
 | 7 | DE | CI: GitHub Actions on every push and pull request | done |
 | 8 | DE | Dagster orchestration and idempotent daily incremental loads | done |
-| 9 | DE | dbt models and tests for the cleaning layer and rollup | next |
-| 10 | DS | Fix survivorship bias: universe by market cap at the start of the window | planned |
+| 9 | DE | dbt models and tests for the cleaning layer and rollup | done |
+| 10 | DS | Fix survivorship bias: universe by market cap at the start of the window | next |
 | 11 | DS | Precision study: second-source checks, hand-labelled sample, confidence intervals | planned |
 
 ## Limitations
@@ -167,7 +176,7 @@ Requires Docker, Python 3.11+, Java 17 or 21 (for Spark), and free CoinGecko Dem
 ```bash
 cp .env.example .env                              # add COINGECKO_API_KEY and ETHERSCAN_API_KEY
 docker compose up -d                              # ClickHouse on :8123 / :9000
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .   # keep the repo outside iCloud-synced folders
 .venv/bin/python scripts/check_env.py             # ClickHouse, Spark + Python workers, keys
 
 .venv/bin/python scripts/ingest_coingecko.py --coins 1000   # ~25 min, ~1,004 of 10k monthly calls, cached
@@ -181,7 +190,7 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
 .venv/bin/python scripts/evaluate.py                        # injection + backtest -> docs/results/
 .venv/bin/python scripts/insights.py                        # every headline number
 .venv/bin/python scripts/build_dashboard.py                 # dashboard data -> docs/dashboard/data.json
-.venv/bin/pytest                                            # 67 tests (integration ones need ClickHouse loaded)
+.venv/bin/pytest                                            # 69 tests (integration ones need ClickHouse loaded)
 
 # Daily operation after the backfill: Dagster runs the incremental jobs on schedule
 DAGSTER_HOME=$PWD/.dagster dagster dev -m chainsignal.orchestration.definitions
