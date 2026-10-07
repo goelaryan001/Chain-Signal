@@ -1,0 +1,16 @@
+name: chainsignal
+version: "1.0.0"
+config-version: 2
+profile: chainsignal
+
+model-paths: ["models"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages", "logs"]
+
+models:
+  chainsignal:
+    quality:
+      +materialized: view      # cheap, always reflects the latest raw data
+    marts:
+      +materialized: table

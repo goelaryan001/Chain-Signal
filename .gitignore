@@ -22,3 +22,8 @@ derby.log
 # Dagster local instance (run history, logs)
 .dagster/
 .tmp_dagster_home_*/
+
+# dbt build output
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/

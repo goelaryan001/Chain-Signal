@@ -8,3 +8,5 @@ python-dotenv>=1.0,<2
 pytest>=8,<9
 dagster>=1.10,<2           # orchestration (Phase 8)
 dagster-webserver>=1.10,<2
+dbt-core>=1.9,<2          # transformation layer + data contracts (Phase 9)
+dbt-clickhouse>=1.9,<2

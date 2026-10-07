@@ -1,0 +1,47 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Tables written by the Python loaders (backfill + Dagster daily/weekly updates). Never modified by dbt.
+    schema: "{{ env_var('CLICKHOUSE_DB', 'chainsignal') }}"
+    tables:
+      - name: coins
+        description: Top-1000 coin list (CoinGecko).
+        columns:
+          - name: coin_id
+            data_tests: [unique, not_null]
+
+      - name: market_daily_raw
+        description: >
+          One row per coin per UTC day. A row stamped day D is day D's close (CoinGecko's
+          00:00 UTC point on D+1). source says whether it came from the history backfill,
+          a provisional daily snapshot, or the weekly reconciliation.
+        columns:
+          - name: coin_id
+            data_tests:
+              - not_null
+              - relationships: {arguments: {to: "source('raw', 'coins')", field: coin_id}}
+          - name: date
+            data_tests: [not_null]
+          - name: price
+            data_tests: [not_null]
+          - name: source
+            data_tests:
+              - accepted_values: {arguments: {values: ["history", "snapshot", "reconciled"]}}
+
+      - name: token_transfers_raw
+        description: Every ERC-20 transfer of the tracked tokens (Etherscan V2).
+        columns:
+          - name: token
+            data_tests:
+              - accepted_values: {arguments: {values: ["LINK", "PEPE", "LOOKS"]}}
+          - name: tx_hash
+            data_tests: [not_null]
+          - name: block_time
+            data_tests: [not_null]
+
+      - name: address_labels
+        description: Contract-or-wallet labels for addresses in back-and-forth pairs.
+        columns:
+          - name: address
+            data_tests: [unique, not_null]

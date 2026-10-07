@@ -24,8 +24,9 @@ from dagster import (AssetCheckResult, AssetExecutionContext, AssetSelection, Ba
 from chainsignal.config import get_settings
 from chainsignal.dashboard import build_dashboard_data
 from chainsignal.db.clickhouse import get_client
+from chainsignal.db.dbt import run_dbt
 from chainsignal.db.incremental import table_fingerprint
-from chainsignal.db.load import MARKET_COLUMNS, TRANSFER_COLUMNS, insert_batched, label_rows, run_sql_file
+from chainsignal.db.load import TRANSFER_COLUMNS, insert_batched, label_rows
 from chainsignal.features.job import run_feature_job, verify_features
 from chainsignal.ingest.coingecko import CoinGeckoClient
 from chainsignal.ingest.etherscan import EtherscanClient
@@ -91,14 +92,15 @@ def address_labels(context: AssetExecutionContext) -> MaterializeResult:
 # ---------- transform / features / models / serve ----------
 
 @asset(deps=[market_snapshot, market_reconcile, token_transfers], group_name="transform",
-       description="Rebuild the token_daily rollup and the data-quality views (flagged -> coin_quality -> clean).")
+       description="dbt build: the token_daily rollup and the data-quality models (flagged -> coin_quality -> "
+                   "clean), plus every data-contract test on sources and models. Any failed test fails the asset.")
 def transforms(context: AssetExecutionContext) -> MaterializeResult:
+    result = run_dbt(["build"])   # raises DbtFailure listing failed models/tests
     client = get_client()
-    run_sql_file(client, "rollup.sql")
-    run_sql_file(client, "quality.sql")
     status = dict(client.query("SELECT status, count() FROM coin_quality GROUP BY status").result_rows)
     clean_rows = client.query("SELECT count() FROM market_daily_clean").result_rows[0][0]
-    return MaterializeResult(metadata=_md({"coin_quality": status, "clean_rows": clean_rows}))
+    context.log.info(f"dbt build: {result}")
+    return MaterializeResult(metadata=_md({"dbt": result, "coin_quality": status, "clean_rows": clean_rows}))
 
 
 @asset(deps=[transforms, address_labels], group_name="features",
@@ -142,13 +144,6 @@ def transfer_keys_unique() -> AssetCheckResult:
     return AssetCheckResult(passed=n == u, metadata={"rows": n, "unique_keys": u, "fingerprint": str(fp)})
 
 
-@asset_check(asset=transforms, description="No coin excluded by coin_quality leaks into market_daily_clean.")
-def clean_view_excludes_bad_coins() -> AssetCheckResult:
-    leaked = get_client().query("""SELECT count() FROM market_daily_clean
-        WHERE coin_id IN (SELECT coin_id FROM coin_quality WHERE status != 'ok')""").result_rows[0][0]
-    return AssetCheckResult(passed=leaked == 0, metadata={"leaked_rows": leaked})
-
-
 @asset_check(asset=anomaly_scores, description="Every method flags exactly its alert budget of coin-days.")
 def alert_budget_exact() -> AssetCheckResult:
     n, z, i, l = get_client().query("""SELECT count(), countIf(zscore_flag), countIf(iforest_flag), countIf(lof_flag)
@@ -170,7 +165,7 @@ weekly_reconcile = define_asset_job(
 defs = Definitions(
     assets=[market_snapshot, market_reconcile, token_transfers, address_labels, transforms, features,
             anomaly_scores, dashboard_data],
-    asset_checks=[market_keys_unique, transfer_keys_unique, clean_view_excludes_bad_coins, alert_budget_exact],
+    asset_checks=[market_keys_unique, transfer_keys_unique, alert_budget_exact],  # model-level contracts are dbt tests
     jobs=[daily_update, weekly_reconcile],
     schedules=[
         ScheduleDefinition(job=daily_update, cron_schedule="20 0 * * *", execution_timezone="UTC"),
