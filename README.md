@@ -1,5 +1,7 @@
 # ChainSignal
 
+[![CI](https://github.com/goelaryan001/Chain-Signal/actions/workflows/ci.yml/badge.svg)](https://github.com/goelaryan001/Chain-Signal/actions/workflows/ci.yml)
+
 A batch pipeline for crypto market and on-chain anomaly detection. It pulls one year of daily market data for the top 1,000 coins (CoinGecko) and every on-chain transfer of three tokens over 90 days (Etherscan), stores it in ClickHouse, engineers features with PySpark, and compares three anomaly detectors: a robust z-score, Isolation Forest and Local Outlier Factor. There are no labels, so the detectors are evaluated with planted synthetic anomalies and a backtest against independently documented events.
 
 The target pattern is **wash trading**: volume that rises without the price movement or new participants that real demand would bring.
@@ -15,7 +17,7 @@ The target pattern is **wash trading**: volume that rises without the price move
 | Synthetic recall at a 1% alert budget | 12σ combination anomalies: Isolation Forest **43%**, z-score 11%; 24σ all types: IF 99%, z-score 85%, LOF 17% |
 | Backtest | Resolv USR depeg flagged by all three on the documented date; Kelp DAO hack missed (token price held) |
 | Strongest wash-trading candidate | Celer Network, 2026-06-03: **$1.5B traded on an $18M market cap**, price flat; confirmed by a second aggregator |
-| Tests | 55 (unit, Spark, live-database, and one regression test per bug fixed) |
+| Tests | 55 (unit, Spark, live-database, and one regression test per bug fixed); the 47 that don't need a loaded database run in CI on every push |
 
 Every number above is reproduced by `scripts/insights.py` (output in [docs/results/insights.txt](docs/results/insights.txt)).
 

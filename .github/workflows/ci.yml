@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Unit, Spark and regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Spark runs on the JVM; PySpark 4.0 supports Java 17 and 21
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install
+        run: pip install -r requirements.txt -e .
+
+      # Tests marked "integration" need a ClickHouse database loaded with the full
+      # dataset (API keys + about an hour of pulls), so they run locally only.
+      - name: Test
+        run: pytest -m "not integration" -v
