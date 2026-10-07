@@ -245,3 +245,14 @@ def pull_token_transfers(
             done = (next_block - state["start_block"]) / max(1, state["end_block"] - state["start_block"])
             print(f"  etherscan {symbol}: {state['rows']:,} transfers, {done:.0%} of block range")
     return state
+
+
+# ---------- incremental updates (Phase 8) ----------
+
+def fetch_transfers(client: EtherscanClient, contract: str, start_block: int, end_block: int) -> list[dict]:
+    """Every transfer of `contract` in [start_block, end_block], slimmed, in on-chain order."""
+    out = []
+    for records, _ in iter_complete_blocks(
+            lambda sb, eb, page: client.token_transfers_page(contract, sb, eb, page), start_block, end_block):
+        out.extend(slim_transfer(r) for r in number_within_tx(records))
+    return out

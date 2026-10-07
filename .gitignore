@@ -18,3 +18,7 @@ derby.log
 .DS_Store
 .vscode/
 .idea/
+
+# Dagster local instance (run history, logs)
+.dagster/
+.tmp_dagster_home_*/

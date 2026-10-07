@@ -6,3 +6,5 @@ requests>=2.32,<3
 clickhouse-connect>=0.8,<1
 python-dotenv>=1.0,<2
 pytest>=8,<9
+dagster>=1.10,<2           # orchestration (Phase 8)
+dagster-webserver>=1.10,<2

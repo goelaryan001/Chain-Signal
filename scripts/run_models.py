@@ -9,15 +9,12 @@ import numpy as np
 import pandas as pd
 
 from chainsignal.db.clickhouse import get_client
-from chainsignal.db.load import run_sql_file
 from chainsignal.models.compare import agreement_table, anomaly_type
-from chainsignal.models.detectors import flag_top, isolation_forest_score, lof_score, zscore_score
-from chainsignal.models.pipeline import METHODS, R_FEATURES, model_rows, robust_market_features, score
+from chainsignal.models.detectors import flag_top
+from chainsignal.models.job import (MARKET_BUDGET, ONCHAIN_BUDGET, ONCHAIN_FEATURES, score_market,
+                                    score_onchain, write_scores)
+from chainsignal.models.pipeline import METHODS, R_FEATURES
 
-MARKET_BUDGET = 0.01    # each method flags its top 1% of coin-days
-ONCHAIN_BUDGET = 0.05   # ~225 token-days in total, so a larger share to get a handful per token
-ONCHAIN_FEATURES = ["transfers_z", "addresses_z", "rt_share_z", "concentration_z",
-                    "large_transfers_z", "tpa_z"]
 PHASE3_CANDIDATES = ["wojak-5", "celer-network", "beldex", "novachargex-coin"]
 
 
@@ -89,14 +86,7 @@ def compare_standard_vs_robust(df: pd.DataFrame) -> None:
     print(f"  max standard |z| seen: {np.nanmax(np.abs(std)):.0f}   max robust |z| seen: {np.nanmax(robust_max):.0f}")
 
 
-def run_onchain(client) -> pd.DataFrame:
-    od = client.query_df(f"SELECT token, day, {', '.join(ONCHAIN_FEATURES)}, transfers, unique_addresses, rt_share "
-                         "FROM onchain_features WHERE transfers_z IS NOT NULL ORDER BY token, day")
-    X = od[ONCHAIN_FEATURES].fillna(0).to_numpy(dtype=float)
-    od["zscore_score"], od["iforest_score"], od["lof_score"] = (
-        zscore_score(X), isolation_forest_score(X), lof_score(X, n_neighbors=10))
-    for m in METHODS:
-        od[f"{m}_flag"] = flag_top(od[f"{m}_score"].to_numpy(), ONCHAIN_BUDGET)
+def report_onchain(od: pd.DataFrame) -> None:
     votes = od[[f"{m}_flag" for m in METHODS]].sum(axis=1)
     print(f"\n=== on-chain: {len(od)} token-days (small sample: treat as illustrative), "
           f"budget {ONCHAIN_BUDGET:.0%} = {od.zscore_flag.sum()} flags per method ===")
@@ -107,43 +97,17 @@ def run_onchain(client) -> pd.DataFrame:
         top = max(ONCHAIN_FEATURES, key=lambda f: abs(r[f]) if pd.notna(r[f]) else 0)
         print(f"  {r.token:<5} {pd.Timestamp(r.day).date()}  transfers {r.transfers:>6,}  addresses {r.unique_addresses:>6,}  "
               f"rt {r.rt_share:.1%}  strongest: {top}={r[top]:.1f}  [{who}]")
-    return od
-
-
-def write_scores(client, market: pd.DataFrame, onchain: pd.DataFrame) -> None:
-    run_sql_file(client, "models.sql")
-    client.command("TRUNCATE TABLE anomaly_scores")
-    cols = ["entity_type", "entity", "date", "zscore_score", "iforest_score", "lof_score",
-            "zscore_flag", "iforest_flag", "lof_flag", "votes"]
-    for kind, df, key, date in (("coin", market, "coin_id", "date"), ("token", onchain, "token", "day")):
-        out = pd.DataFrame({
-            "entity_type": kind, "entity": df[key].astype(str), "date": pd.to_datetime(df[date]).dt.date,
-            **{f"{m}_score": df[f"{m}_score"].astype(float) for m in METHODS},
-            **{f"{m}_flag": df[f"{m}_flag"].astype(bool) for m in METHODS},
-            "votes": df[[f"{m}_flag" for m in METHODS]].sum(axis=1).astype("uint8")})
-        client.insert_df("anomaly_scores", out[cols])
 
 
 def main() -> None:
     client = get_client()
     t = time.time()
-    df = client.query_df("""
-        SELECT coin_id, date, volume, market_cap, log_return, residual_return, extreme_move,
-               return_z, volume_z, turnover_z, residual_z
-        FROM market_features ORDER BY coin_id, date""")
-    df["date"] = pd.to_datetime(df["date"])
-    df = robust_market_features(df)
-    print(f"robust z-scores for {len(df):,} rows in {time.time() - t:.0f}s")
-
-    df = model_rows(df)
-    t = time.time()
-    df = score(df, MARKET_BUDGET)
-    print(f"scored {len(df):,} rows with 3 methods in {time.time() - t:.0f}s")
-    df["date"] = df["date"].dt.date
-
+    df = score_market(client)
+    print(f"scored {len(df):,} coin-days with 3 methods in {time.time() - t:.0f}s")
     report_market(df)
     compare_standard_vs_robust(df)
-    onchain = run_onchain(client)
+    onchain = score_onchain(client)
+    report_onchain(onchain)
     write_scores(client, df, onchain)
     print("\nwrote anomaly_scores to ClickHouse")
 

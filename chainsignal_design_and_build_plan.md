@@ -164,7 +164,7 @@ badge to the README. Verify the run is green on the latest commit before merging
 ```
 Why: proves the project works on a clean machine, and keeps it that way. Result: 47 tests pass on GitHub in ~35 s (PR #1).
 
-### Phase 8 — Orchestration and incremental loads (data engineering)
+### Phase 8 — Orchestration and incremental loads (data engineering) ✅ done
 ```
 Put the pipeline under Dagster: each stage (ingest CoinGecko, ingest Etherscan,
 load ClickHouse, build features, score, evaluate) becomes an asset with its
@@ -176,6 +176,8 @@ appending duplicates. Prove it by running the same day twice and showing
 identical row counts and checksums.
 ```
 Why: today the pipeline is a list of scripts with full reloads. A scheduled, incremental, re-runnable pipeline is the core of real data engineering work, and the single biggest gap in the current version.
+
+Result: 8 Dagster assets, 4 asset checks, a daily and a weekly job. Daily market days come from a 4-call `/coins/markets` snapshot (daily per-coin history would be 3x the API budget), marked provisional and replaced weekly with authoritative values. Loads swap whole day partitions atomically (`REPLACE PARTITION`). Re-runs and full reloads reproduce identical row-level fingerprints.
 
 ### Phase 9 — dbt models and tests (data engineering)
 ```
