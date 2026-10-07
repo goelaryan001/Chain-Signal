@@ -105,8 +105,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Extra</span><span class="t">Dashboard + GitHub</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 7 · DE</span><span class="t">Continuous integration</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 8 · DE</span><span class="t">Dagster + incremental loads</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 9 · DE</span><span class="t">dbt models + tests</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 8 · DE</span><span class="t">Dagster + incremental loads</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 9 · DE</span><span class="t">dbt models + tests</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 10 · DS</span><span class="t">Fix survivorship bias</span><span class="pill later">later</span></li>
       <li><span class="n">Phase 11 · DS</span><span class="t">Precision study</span><span class="pill later">later</span></li>
     </ol>
@@ -933,6 +933,107 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </ul>
   </article>
 
+  <article class="entry" id="phase-8">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 8 · 7 Oct 2026 · data engineering track</span>
+      <h2>Orchestration with Dagster, and idempotent daily loads</h2>
+      <div class="stamp"><span>branch <b>phase-8-orchestration</b></span><span>tests <b>67 passing</b> (58 in CI)</span><span>assets <b>8</b> · checks <b>4</b> · jobs <b>2</b></span><span>bugs / corrections <b>5</b></span></div>
+    </div>
+    <p>Goal: turn a set of scripts with full reloads into a pipeline that runs itself every day, adds only new data, and can be re-run safely. The interview question this answers: <i>"Does it run itself? What happens if a run fails, or runs twice?"</i></p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>A design constraint first: the API budget</h3>
+        <p>Updating each coin's history daily with <code>market_chart</code> would cost 1,000 calls a day, about 30,000 a month, three times CoinGecko's free 10,000. <code>/coins/markets</code> returns 250 coins per call, so a <b>snapshot of all 1,000 tracked coins costs 4 calls</b>. Taken shortly after 00:00 UTC on day D, it approximates day D−1's close, which is what the historical rows hold. A snapshot taken later in the day is refused, because it would be a mid-day price. The snapshot asks for the tracked coins <i>by id</i>, not "today's top 1,000", so the universe can't drift.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Daily partitions, so a day can be replaced atomically</h3>
+        <p>The idempotent pattern in ClickHouse: insert a day's rows into a staging copy of the table, then <code>ALTER TABLE … REPLACE PARTITION ID '20261006' FROM staging</code>. That swaps the whole day in one step, so running it twice replaces it twice and never duplicates. This needs a day to be a partition, so the raw tables moved from monthly to daily partitions. The cost was measured before accepting it:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th></th><th>Monthly</th><th>Daily</th></tr></thead>
+          <tbody>
+            <tr><td>market_daily_raw</td><td>13 parts · 7.3 MB</td><td>365 parts · 10.7 MB (+47%)</td></tr>
+            <tr><td>token_transfers_raw</td><td>16 parts · 96 MB</td><td>91 parts · 97.6 MB (+1.5%)</td></tr>
+            <tr><td>typical query</td><td>27 ms</td><td>24 ms</td></tr>
+          </tbody>
+        </table></div>
+        <p>A full reload now touches about 365 partitions per insert, above ClickHouse's default limit of 100, so the client raises that limit (with a comment explaining why).</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>The daily update, run for real at 01:00 UTC</h3>
+        <ul class="tight">
+          <li><b>Market:</b> 1,000 rows for 6 Oct from one snapshot, every tracked coin present. 3 seconds, 4 API calls.</li>
+          <li><b>Transfers:</b> refetch from the <i>start of the last stored day</i> to the latest block. That completed 6 Oct (14,770 → 15,696; the original pull had stopped around 22:00), started 7 Oct (524), and left 5 Oct untouched. Zero duplicates.</li>
+          <li><b>Raw first:</b> every fetch is written to disk before loading, so a re-run reloads the same raw file instead of calling the API.</li>
+        </ul>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Checked the snapshot against the authoritative daily close</h3>
+        <p>For 20 sampled coins, the snapshot was compared with <code>market_chart</code>'s value for the same day. <b>Prices: median difference 0.04%, worst 1.6%.</b> <b>Volume: median 0.85%, but bora −83% and meme-horse +35%.</b> A snapshot's volume is a rolling 24-hour figure measured at fetch time, not at 00:00. For thin coins, one large trade entering or leaving that window moves it a lot, and volume spikes are exactly what this project hunts.</p>
+        <p class="why"><strong>Design response: provisional now, corrected later.</strong> Snapshot rows are stored with <code>source='snapshot'</code>. A weekly job refetches the past 8 days with <code>market_chart</code> (~1,000 calls a week, within budget) and replaces those days with <code>source='reconciled'</code> values. A partial run is safe: each day's existing rows are read back, only the reconciled coins are overridden, then the whole day is replaced. Tested on 20 coins: 20 reconciled, 980 snapshot rows kept, bora corrected to $0.18M.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Proved idempotency, then proved it properly</h3>
+        <p>Re-running both updates fetched nothing new from the APIs and left the tables unchanged. Then the stronger test: <b>a full reload from the raw files alone must reproduce the incrementally built tables exactly.</b></p>
+        <div class="result">
+          <span class="ok">fingerprint deterministic across repeated runs: True</span>
+          <span class="ok">full reload : market (320,158 rows, 16112214395830948925) · transfers (1,640,374 rows, 12001611639757524553)</span>
+          <span class="ok">+ updates   : market (320,158 rows, 16112214395830948925) · transfers (1,640,374 rows, 12001611639757524553)</span>
+          <span class="ok">FULL RELOAD == INCREMENTAL</span>
+        </div>
+        <p>The fingerprint is a count plus the XOR of a hash of every row: exact, independent of row order, and changed by any single value in any row. Why it replaced the first version is Bug 15 below.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>The pipeline as Dagster assets</h3>
+        <pre><code>market_snapshot ─┐
+market_reconcile ┼─&gt; transforms ─┐
+token_transfers ─┴─&gt; address_labels ┴─&gt; features ─&gt; anomaly_scores ─&gt; dashboard_data</code></pre>
+        <ul class="tight">
+          <li><b>Jobs:</b> <code>daily_update</code> at 00:20 UTC (inside the snapshot window) and <code>weekly_reconcile</code> on Mondays at 01:00 UTC. API-calling assets retry twice with exponential backoff.</li>
+          <li><b>Asset checks (data contracts):</b> unique market keys; unique transfer keys, with the fingerprint attached; no excluded coin in the clean view; each method flags exactly its alert budget. A failed feature verification fails the asset.</li>
+          <li><b>One copy of the logic:</b> the feature, scoring and dashboard steps moved from scripts into library functions (<code>features/job.py</code>, <code>models/job.py</code>, <code>dashboard.py</code>). The scripts are now thin wrappers, so the command line and Dagster run identical code.</li>
+        </ul>
+        <div class="result">
+          <span class="ok">dagster job execute -j daily_update → RUN_SUCCESS</span>
+          <span class="ok">7 assets materialized · 11 steps succeeded · 4/4 asset checks passed</span>
+          <span class="ok">snapshot reused (no API call) · 583 new transfers on 7 Oct · 20 new addresses labelled · features verified (140 s)</span>
+          <span class="ok">anomaly_scores: 255,302 coin-days (6 Oct now included)</span>
+        </div>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Tests</h3>
+        <p>12 new tests. <b>Unit tests:</b> the snapshot window (including a snapshot from a UTC−7 clock), the parser, the reconcile-over-snapshot precedence, transfer deduplication (newest fetch wins) and partition ids. <b>Integration:</b> <code>REPLACE PARTITION</code> on a scratch table is idempotent and leaves other days alone. <b>CI:</b> the Dagster definitions load, both jobs and schedules exist, the daily schedule falls inside the snapshot window, and the asset graph has the intended edges.</p>
+      </div></li>
+    </ol>
+
+    <h3>Bugs, corrections and what they taught us</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix / correction</th></tr></thead>
+      <tbody>
+        <tr><td>Correction</td><td><b>Snapshot volume drifts for illiquid coins</b> (bora −83% vs the authoritative daily value).</td><td>Snapshot rows are provisional (<code>source='snapshot'</code>); a weekly reconciliation replaces them with authoritative values.</td></tr>
+        <tr><td>Bug 14 (caught in design review)</td><td>After the first incremental update, a full reload would have <b>silently dropped 6–7 Oct</b>: the loader only read the original backfill files.</td><td>A full reload now reads history, snapshots, reconciled values and every incremental transfer file, with explicit precedence (reconciled beats snapshot; the newest transfer fetch wins per key). The load script's independent verification deduplicates the raw files with its own code.</td></tr>
+        <tr><td>Bug 15 (in my verification)</td><td>Comparing the full reload with the incremental state printed <b>MISMATCH</b> although every printed number looked equal. The fingerprint included <code>sum(volume)</code>: ClickHouse sums in parallel, so the last cents of a $66-trillion total vary between runs on identical data (…170.25, …170.24, …170.25). The earlier idempotency check had passed only because both runs happened to round the same way.</td><td>An exact, order-independent fingerprint: <code>groupBitXor(cityHash64(all columns))</code>. Deterministic across runs and sensitive to any single value. Lesson: <b>never use float sums as checksums</b>.</td></tr>
+        <tr><td>Test fix</td><td>The "daily schedule is inside the snapshot window" test checked a cron string written into the test, not the real schedule, so it couldn't fail.</td><td>The test reads the schedule from the Dagster definitions.</td></tr>
+        <tr><td>Env (recurring)</td><td>Docker Desktop hung on quit again and corrupted the ClickHouse container record (<code>RWLayer … unexpectedly nil</code>), even though ClickHouse had been stopped cleanly first.</td><td>Removed and recreated the container; the data volume was intact. This is a Docker Desktop issue on this machine, not data loss.</td></tr>
+        <tr><td>Tooling</td><td>A screenshot of Dagster's lineage page was covered by a first-visit pop-up, so it wasn't committed. Separately, <code>dagster dev</code> ignores SIGTERM: it expects Ctrl-C, and its processes take a few seconds to exit, which I first misread as a failed kill.</td><td>The README shows the asset graph as a Mermaid diagram generated from the real dependency edges, and documents stopping with Ctrl-C.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>What happens if a run happens twice?</b> Nothing changes. Raw data is stored once, and each load atomically replaces whole day partitions. Proven with identical row-level fingerprints.</li>
+      <li><b>How do you know incremental loading is correct?</b> A full reload from raw files and the incremental path produce identical fingerprints for all 1.96M rows.</li>
+      <li><b>How did you handle the API budget?</b> 4-call snapshots daily, provisional, then weekly reconciliation with authoritative values, a standard pattern for late-arriving corrections. Measured first: prices agree within 0.04%, volume doesn't for thin coins.</li>
+      <li><b>Why did you change your checksum?</b> Float sums aren't deterministic under parallel aggregation; a hash XOR is exact.</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Roadmap · resume upgrades</span>
     <h2 id="next">Phases 8–11: closing the gaps an interviewer would probe</h2>
@@ -940,8 +1041,8 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     <div class="table-wrap"><table>
       <thead><tr><th>Phase</th><th>What</th><th>The interview question it answers</th></tr></thead>
       <tbody>
-        <tr><td>8 · DE (next)</td><td><b>Dagster orchestration and incremental loads.</b> Each stage becomes an asset with dependencies; a daily schedule adds only new days; re-running a day replaces its partition (proved with identical counts and checksums).</td><td>"Does it run itself? What happens if a run fails, or runs twice?"</td></tr>
-        <tr><td>9 · DE</td><td><b>dbt.</b> Quality views, clean view and rollup move into dbt models; the data contracts become dbt tests; docs site with a lineage graph.</td><td>"How do you test and document your transformations?"</td></tr>
+        <tr><td>8 · DE ✅ done</td><td><b>Dagster orchestration and incremental loads.</b> Each stage becomes an asset with dependencies; a daily schedule adds only new days; re-running a day replaces its partition (proved with identical counts and checksums).</td><td>"Does it run itself? What happens if a run fails, or runs twice?"</td></tr>
+        <tr><td>9 · DE (next)</td><td><b>dbt.</b> Quality views, clean view and rollup move into dbt models; the data contracts become dbt tests; docs site with a lineage graph.</td><td>"How do you test and document your transformations?"</td></tr>
         <tr><td>10 · DS</td><td><b>Fix survivorship bias.</b> Pull coins ranked 1,001–3,500 (~2,500 CoinGecko calls, within the monthly budget) and choose the universe by market cap at the <i>start</i> of the window; rerun and measure what changed. Coins below rank 3,500 remain a stated limitation.</td><td>"Is your sample biased? What did fixing it change?"</td></tr>
         <tr><td>11 · DS</td><td><b>Precision study.</b> Check every 2+-method flag against a second, independent data source; hand-label a random sample of ~100 flagged days by cause; report precision and recall with bootstrap confidence intervals.</td><td>"How many of your alerts are real?"</td></tr>
       </tbody>
@@ -953,7 +1054,7 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <span class="eyebrow">Project index</span>
       <h2>Every bug and correction</h2>
     </div>
-    <p>Twelve bugs (numbered 1–13; there is no Bug 8), one environment failure and six corrections across six phases and the dashboard. Several were found phases after they were introduced. The pattern in how they were found is the most useful lesson of the project: <b>almost none showed up in summary statistics</b>. They were caught by reading actual rows, cross-checking against an independent source, or noticing that two numbers that should match didn't.</p>
+    <p>Fourteen bugs (numbered 1–15; there is no Bug 8), recurring environment failures and seven corrections, across Phases 0–8 and the dashboard. Several were found phases after they were introduced. The pattern in how they were found is the most useful lesson of the project: <b>almost none showed up in summary statistics</b>. They were caught by reading actual rows, cross-checking against an independent source, or noticing that two numbers that should match didn't.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>Introduced</th><th>Found</th><th>Problem</th><th>How it was caught</th></tr></thead>
       <tbody>
@@ -976,6 +1077,9 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
         <tr><td>Correction</td><td>6</td><td>6</td><td>Stablecoin rule missed yield-bearing tokens</td><td>reUSD on the non-stablecoin list</td></tr>
         <tr><td>Bug 12</td><td>dashboard</td><td>dashboard</td><td>Date type mismatch in the export</td><td>Crash</td></tr>
         <tr><td>Bug 13</td><td>dashboard</td><td>dashboard</td><td>Possible endless reload on theme change</td><td>Reviewing my own code before publishing</td></tr>
+        <tr><td>Correction</td><td>8</td><td>8</td><td>Snapshot volume drifts for illiquid coins</td><td>Comparing 20 snapshots with authoritative values</td></tr>
+        <tr><td>Bug 14</td><td>8</td><td>8</td><td>Full reload would drop incremental days</td><td>Design review before running a reload</td></tr>
+        <tr><td>Bug 15</td><td>8</td><td>8</td><td>Float-sum checksum not deterministic</td><td>A "MISMATCH" between equal-looking numbers</td></tr>
       </tbody>
     </table></div>
     <p class="why">Design changes made on evidence, such as the codec choice, the wallet-share feature and the LOF rounding step, are recorded in their phase entries rather than here.</p>

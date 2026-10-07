@@ -17,7 +17,7 @@ The target pattern is **wash trading**: volume that rises without the price move
 | Synthetic recall at a 1% alert budget | 12σ combination anomalies: Isolation Forest **43%**, z-score 11%; 24σ all types: IF 99%, z-score 85%, LOF 17% |
 | Backtest | Resolv USR depeg flagged by all three on the documented date; Kelp DAO hack missed (token price held) |
 | Strongest wash-trading candidate | Celer Network, 2026-06-03: **$1.5B traded on an $18M market cap**, price flat; confirmed by a second aggregator |
-| Tests | 55 (unit, Spark, live-database, and one regression test per bug fixed); the 47 that don't need a loaded database run in CI on every push |
+| Tests | 67 (unit, Spark, orchestration, live-database, and one regression test per bug fixed); the 58 that don't need a loaded database run in CI on every push |
 
 Every number above is reproduced by `scripts/insights.py` (output in [docs/results/insights.txt](docs/results/insights.txt)).
 
@@ -41,6 +41,33 @@ flowchart LR
 ```
 
 Batch, not streaming: data is pulled on a schedule, every load is a full idempotent reload from the raw files, and every stage verifies its output against the previous one.
+
+## Orchestration and daily updates
+
+The pipeline runs under **Dagster** as a graph of assets ([definitions](src/chainsignal/orchestration/definitions.py)):
+
+```mermaid
+flowchart LR
+    market_snapshot --> transforms
+    market_reconcile --> transforms
+    token_transfers --> transforms
+    token_transfers --> address_labels
+    transforms --> features
+    address_labels --> features
+    features --> anomaly_scores
+    anomaly_scores --> dashboard_data
+```
+
+| Job | Schedule (UTC) | What it does |
+|---|---|---|
+| `daily_update` | 00:20 every day | Provisional market day from one `/coins/markets` snapshot of the 1,000 tracked coins (4 API calls), new transfers from the start of the last stored day, labels for new addresses, then rollup, quality views, Spark features, scores and dashboard data |
+| `weekly_reconcile` | Monday 01:00 | Replaces the past week's provisional market days with authoritative `market_chart` values, then everything downstream |
+
+- **Why a snapshot plus a weekly reconciliation.** Daily per-coin history would cost ~30,000 API calls a month, three times the free budget. A snapshot taken just after midnight matches the historical daily close closely for prices (median difference 0.04% across 20 sampled coins). Rolling 24-hour volume can drift for illiquid coins (one was off by 83%), so snapshot rows are marked `source='snapshot'` and replaced weekly with authoritative values (`source='reconciled'`).
+- **Idempotent by construction.** Every fetch is stored raw before loading. Each load writes a staging table and atomically swaps whole day partitions (`ALTER TABLE … REPLACE PARTITION`), so re-running any day replaces it rather than duplicating it. This is verified with an exact row-level fingerprint (XOR of row hashes): re-running a day gives an identical fingerprint, and a full reload from the raw files reproduces the incrementally built tables exactly.
+- **Data contracts as asset checks:** unique market and transfer keys, no excluded coin in the clean view, and an exact alert budget per method. A failed feature verification fails the run.
+
+Run it locally: `dagster dev -m chainsignal.orchestration.definitions` (web UI at http://localhost:3000; stop with Ctrl-C), or run one job: `dagster job execute -m chainsignal.orchestration.definitions -j daily_update`.
 
 ## Design decisions
 
@@ -119,8 +146,8 @@ The project is complete as designed. Five further phases strengthen it for data 
 | Phase | Track | What | State |
 |---|---|---|---|
 | 7 | DE | CI: GitHub Actions on every push and pull request | done |
-| 8 | DE | Dagster orchestration and idempotent daily incremental loads | next |
-| 9 | DE | dbt models and tests for the cleaning layer and rollup | planned |
+| 8 | DE | Dagster orchestration and idempotent daily incremental loads | done |
+| 9 | DE | dbt models and tests for the cleaning layer and rollup | next |
 | 10 | DS | Fix survivorship bias: universe by market cap at the start of the window | planned |
 | 11 | DS | Precision study: second-source checks, hand-labelled sample, confidence intervals | planned |
 
@@ -154,7 +181,10 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
 .venv/bin/python scripts/evaluate.py                        # injection + backtest -> docs/results/
 .venv/bin/python scripts/insights.py                        # every headline number
 .venv/bin/python scripts/build_dashboard.py                 # dashboard data -> docs/dashboard/data.json
-.venv/bin/pytest                                            # 55 tests (integration ones need ClickHouse loaded)
+.venv/bin/pytest                                            # 67 tests (integration ones need ClickHouse loaded)
+
+# Daily operation after the backfill: Dagster runs the incremental jobs on schedule
+DAGSTER_HOME=$PWD/.dagster dagster dev -m chainsignal.orchestration.definitions
 ```
 
 ## Repository layout
@@ -162,7 +192,9 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt -e .
 ```
 src/chainsignal/
   ingest/       CoinGecko and Etherscan clients, block-range pagination, address labels, rate limiting
-  db/           schema, rollup, quality views, feature and score tables (SQL); loader
+  db/           schema, rollup, quality views, feature and score tables (SQL); loader; partition replace
+  pipeline/     daily incremental update: snapshot, transfers, weekly reconciliation
+  orchestration/ Dagster assets, asset checks, jobs, schedules
   features/     PySpark market and on-chain features; Parquet bridge to ClickHouse
   models/       robust z, Isolation Forest, LOF; shared scoring pipeline; comparison helpers
   evaluation/   synthetic injection; backtest against documented events
