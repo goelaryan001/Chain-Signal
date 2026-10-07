@@ -112,6 +112,18 @@ The event coins had fallen out of the current top 1,000 (**survivorship bias** i
 - **Activity and participation can come apart.** LINK on 2026-08-31 had three times its normal transfers from an unchanged set of addresses. All three detectors flagged it as recycled activity. PEPE's busiest day, by contrast, brought new participants with it.
 - **LOOKS, the token with a wash-trading history, is now nearly dormant:** a median of 28 transfers a day from 1,132 addresses in 90 days.
 
+## Roadmap
+
+The project is complete as designed. Five further phases strengthen it for data engineering and data science roles (full plan in Part 9 of the [design doc](chainsignal_design_and_build_plan.md)):
+
+| Phase | Track | What | State |
+|---|---|---|---|
+| 7 | DE | CI: GitHub Actions on every push and pull request | done |
+| 8 | DE | Dagster orchestration and idempotent daily incremental loads | next |
+| 9 | DE | dbt models and tests for the cleaning layer and rollup | planned |
+| 10 | DS | Fix survivorship bias: universe by market cap at the start of the window | planned |
+| 11 | DS | Precision study: second-source checks, hand-labelled sample, confidence intervals | planned |
+
 ## Limitations
 
 - **Survivorship bias:** the coin universe is today's top 1,000. Selecting by market cap at the start of the window would include coins that later collapsed.
