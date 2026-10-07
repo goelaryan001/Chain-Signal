@@ -11,31 +11,14 @@ import pandas as pd
 from chainsignal.db.clickhouse import get_client
 from chainsignal.db.load import run_sql_file
 from chainsignal.models.compare import agreement_table, anomaly_type
-from chainsignal.models.detectors import (flag_top, isolation_forest_score, lof_score,
-                                          robust_rolling_z, zscore_score)
+from chainsignal.models.detectors import flag_top, isolation_forest_score, lof_score, zscore_score
+from chainsignal.models.pipeline import METHODS, R_FEATURES, model_rows, robust_market_features, score
 
 MARKET_BUDGET = 0.01    # each method flags its top 1% of coin-days
 ONCHAIN_BUDGET = 0.05   # ~225 token-days in total, so a larger share to get a handful per token
-METHODS = ["zscore", "iforest", "lof"]
-R_FEATURES = ["rz_return", "rz_volume", "rz_turnover", "rz_residual"]
 ONCHAIN_FEATURES = ["transfers_z", "addresses_z", "rt_share_z", "concentration_z",
                     "large_transfers_z", "tpa_z"]
-# robust z source column and its scale floor: a 3-sigma flag then needs at least a ~1.5%
-# price move or a ~30% volume / turnover change
-ROBUST_SOURCES = {"rz_return": ("log_return", 0.005), "rz_volume": ("log_volume", 0.10),
-                  "rz_turnover": ("log_turnover", 0.10), "rz_residual": ("residual_return", 0.005)}
 PHASE3_CANDIDATES = ["wojak-5", "celer-network", "beldex", "novachargex-coin"]
-
-
-def robust_market_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.sort_values(["coin_id", "date"]).reset_index(drop=True)
-    df["log_volume"] = np.log1p(df["volume"])
-    df["log_turnover"] = np.where((df["market_cap"] > 0) & (df["volume"] > 0),
-                                  np.log(df["volume"] / df["market_cap"].where(df["market_cap"] > 0)), np.nan)
-    for out, (src, floor) in ROBUST_SOURCES.items():
-        parts = [robust_rolling_z(g[src], g["date"], min_scale=floor) for _, g in df.groupby("coin_id")]
-        df[out] = pd.concat(parts)
-    return df
 
 
 def report_market(df: pd.DataFrame) -> None:
@@ -152,18 +135,9 @@ def main() -> None:
     df = robust_market_features(df)
     print(f"robust z-scores for {len(df):,} rows in {time.time() - t:.0f}s")
 
-    # turnover is missing where market cap is unknown: impute 0 (= "typical") so the row
-    # still counts on its other features; rows missing return, volume or residual are dropped
-    df = df.dropna(subset=["rz_return", "rz_volume", "rz_residual"]).reset_index(drop=True)
-    df["rz_turnover"] = df["rz_turnover"].fillna(0.0)
-    X = df[R_FEATURES].to_numpy(dtype=float)
-
+    df = model_rows(df)
     t = time.time()
-    df["zscore_score"] = zscore_score(X)
-    df["iforest_score"] = isolation_forest_score(X)
-    df["lof_score"] = lof_score(X)
-    for m in METHODS:
-        df[f"{m}_flag"] = flag_top(df[f"{m}_score"].to_numpy(), MARKET_BUDGET)
+    df = score(df, MARKET_BUDGET)
     print(f"scored {len(df):,} rows with 3 methods in {time.time() - t:.0f}s")
     df["date"] = df["date"].dt.date
 
