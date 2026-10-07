@@ -100,8 +100,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 1</span><span class="t">Real data ingestion</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill next">next</span></li>
       <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill later">later</span></li>
     </ol>
   </section>
@@ -475,6 +475,7 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <li>Surprise 1: hashes and addresses were 68% of storage. That led to the codec change (173 → 96 MB).</li>
       <li>Surprise 2: the >10x glitches come in synchronized waves across Bittensor tokens, so we exclude by coin, not by row.</li>
       <li>Surprise 3: the most "suspicious-looking" back-and-forth pairs are infrastructure contracts.</li>
+      <li><b>Correction found later (Phase 4):</b> the cleaning layer only checked <i>prices</i>. Volume has feed glitches too: Bitcoin shows $0.38B on 12 Mar 2026 between days of $35–46B. A <code>volume_glitch</code> flag (an isolated one-day collapse below 5% of both neighbours) now removes 921 such days across 179 coins from <code>market_daily_clean</code>.</li>
     </ul>
 
     <h3>Commits</h3>
@@ -575,7 +576,7 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <tbody>
         <tr><td>The Phase 2 warning was even bigger than it looked</td><td><b>96% (LINK, PEPE) and 98% (LOOKS)</b> of back-and-forth transfers involve a contract. Real wallet-to-wallet round trips are ~1% of transfers.</td><td>Without labels, the wash-trading signal would have been almost entirely DEX infrastructure.</td></tr>
         <tr><td>Crypto has fat tails</td><td>|return_z| &gt; 3 on 2.8% of days, ~10x the 0.27% a normal distribution predicts.</td><td>Phase 4 must calibrate thresholds to the data. A textbook "z &gt; 3" flags far more than expected.</td></tr>
-        <tr><td>Exploding z-scores</td><td>novachargex volume_z = 201: when the trailing std is tiny, z-scores blow up.</td><td>Phase 4 should test robust z-scores (median / MAD).</td></tr>
+        <tr><td>Exploding z-scores</td><td>novachargex volume_z = 201: when the trailing std is tiny, z-scores blow up.</td><td>Phase 4 should test robust z-scores (median / MAD). <b>Correction from Phase 4:</b> median/MAD alone wasn't enough (it hit 74,309 on stablecoins). It also needed a floor on the scale.</td></tr>
         <tr><td>Wash-trading-shaped candidates</td><td>wojak-5: $1.21B volume, volume_z 20.9, return_z −0.38. celer-network: $1.49B, volume_z 28.8. beldex: $551M, volume_z 43.</td><td>Candidates only. A volume spike could also be a feed error in the volume figure. Phase 5 checks them against outside sources.</td></tr>
         <tr><td>Recycled activity vs real interest</td><td>LINK on 31 Aug: 30,670 transfers (3x normal) from a flat set of addresses (addresses_z 0.19). PEPE on 20 Aug: transfers z 7.5, but addresses z 6.2 as well.</td><td>activity_vs_participants separates the two: LINK scores high, PEPE low.</td></tr>
       </tbody>
@@ -613,13 +614,117 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </ul>
   </article>
 
+  <article class="entry" id="phase-4">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 4 · 6 Oct 2026</span>
+      <h2>Model comparison: z-score vs Isolation Forest vs LOF</h2>
+      <div class="stamp"><span>branch <b>phase-4-models</b></span><span>commit <b>e83e69c</b></span><span>tests <b>43 passing</b></span><span>bugs / corrections <b>4</b></span></div>
+    </div>
+    <p>Goal: run the three candidate detectors on the same features and compare them deliberately. Where do they agree, where do they disagree, and what kind of anomaly does each one catch? There are no labels, so the comparison has to be designed carefully, and the first runs turned out to be as much a test of the data and the methods as of the anomalies.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Gave all three methods the same inputs</h3>
+        <p>For every coin-day: <b>robust z-scores</b> of return, volume, turnover and market-adjusted (residual) return. Robust means using the trailing 30-day <b>median and MAD</b> (median absolute deviation) instead of mean and standard deviation, still excluding the current day. That responds to Phase 3's volume z of 201: a median isn't dragged around by one extreme value. Same inputs for all three means any difference comes from the method.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Method</th><th>Score</th><th>Expected strength</th></tr></thead>
+          <tbody>
+            <tr><td>Z-score</td><td>largest |z| across the 4 features</td><td>single-feature extremes, fully interpretable</td></tr>
+            <tr><td>Isolation Forest</td><td>how few random splits isolate the point</td><td>global outliers, unusual combinations</td></tr>
+            <tr><td>LOF</td><td>the point's density vs its 20 nearest neighbours'</td><td>local outliers, odd relative to similar days</td></tr>
+          </tbody>
+        </table></div>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Designed a fair comparison without ground truth</h3>
+        <p>The three scores live on different scales, so comparing raw values or "default thresholds" means nothing. Instead each method gets the <b>same alert budget</b>: it flags its top 1% of coin-days (2,545). Then we measure overlap (Jaccard), consensus (how many methods agree), and the <i>type</i> of what each flags: price shock, volume-only, both, another feature, or <b>multivariate-only</b> (no single feature extreme, only the combination).</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Tested the design doc's central claim on synthetic data</h3>
+        <p>A cloud where x and y move together, plus one point at (2, −2): each feature only 2σ, but far off the line. Result: <b>the z-score misses it; Isolation Forest and LOF both catch it</b>. Other tests: LOF finds a point just outside a dense cluster, robust z ignores one past extreme, and the alert budget is exact even with ties.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>First run, and four corrections</h3>
+        <p>The first run's numbers looked plausible, but reading the actual flagged rows showed four problems. Each was measured, fixed and re-run (details in the table below):</p>
+        <ul class="tight">
+          <li>Bitcoin and Ethereum appeared as "wash trading" with <i>negative</i> volume z: volume <b>feed glitches</b> the Phase 2 cleaning had missed.</li>
+          <li>Robust z still reached <b>74,309</b>, on stablecoins.</li>
+          <li>The wash-trading list counted volume collapses as well as spikes.</li>
+          <li>LOF's "top anomalies" included perfectly ordinary days of a tokenized treasury bond.</li>
+        </ul>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Final results (market: 254,454 coin-days, 883 coins)</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Overlap (Jaccard)</th><th>z-score</th><th>Isolation Forest</th><th>LOF</th></tr></thead>
+          <tbody>
+            <tr><td>z-score</td><td>1.00</td><td><b>0.73</b></td><td>0.11</td></tr>
+            <tr><td>Isolation Forest</td><td>0.73</td><td>1.00</td><td>0.11</td></tr>
+            <tr><td>LOF</td><td>0.11</td><td>0.11</td><td>1.00</td></tr>
+          </tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Share of flags by type</th><th>z-score</th><th>Isolation Forest</th><th>LOF</th></tr></thead>
+          <tbody>
+            <tr><td>volume only</td><td>36.0%</td><td>30.1%</td><td>25.7%</td></tr>
+            <tr><td>price and volume</td><td>33.9%</td><td>46.6%</td><td>19.6%</td></tr>
+            <tr><td>price shock</td><td>27.2%</td><td>22.3%</td><td>17.1%</td></tr>
+            <tr><td>other feature</td><td>2.9%</td><td>1.0%</td><td>13.5%</td></tr>
+            <tr><td><b>multivariate only</b></td><td>0.0%</td><td><b>0.0%</b></td><td><b>24.1%</b></td></tr>
+          </tbody>
+        </table></div>
+        <p>Consensus: 460 coin-days flagged by all three, 2,252 by at least two. To make the top 1%, a coin-day needs a robust |z| of <b>12.3 or more</b>, not the textbook 3.</p>
+      </div></li>
+    </ol>
+
+    <h3>What the comparison actually says</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Finding</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr><td><b>On real data, Isolation Forest behaves mostly like the z-score.</b> The design doc expected IF to catch multivariate patterns the z-score misses. It did on synthetic data, but at a 1% budget on real crypto data it flagged <b>0% multivariate-only</b> anomalies.</td><td>Jaccard 0.73 with the z-score. Crypto's fat tails fill the whole budget with huge global outliers, so subtle combinations rank too low. IF's unique catches are rows extreme on <i>all</i> features at once (jpycoin: return −10.9, volume 11.2, turnover 9.9, residual −11.9), not hidden combinations.</td></tr>
+        <tr><td><b>LOF is the method that adds a different view.</b></td><td>Overlap with the others only 0.11; 24% of its flags are multivariate-only. Example: <b>handy</b>, price −4.2σ and turnover +8.5σ with volume flat. Turnover rose because market cap fell, not because trading rose, which no single feature shows.</td></tr>
+        <tr><td>The z-score's unique catches are single-feature extremes.</td><td>emerald-security-token: volume −24.9σ on its own, with no other feature moving. Isolation Forest ranks a point extreme on one axis lower than one extreme on all four.</td></tr>
+        <tr><td>Robust vs standard z-scores flag very different days.</td><td>Overlap only 0.23 at the same budget; 111 standard-z flags aren't extreme on <i>any</i> robust feature. Max standard |z| was 19,297, robust (with floor) 501.</td></tr>
+        <tr><td>Wash-trading-shaped candidates: 242 consensus coin-days of a volume spike with a calm price.</td><td>celer-network $1.49B (4 Jun) and $487M (5 Jun, all three methods); pyth-network $911M, $477M, $432M in late August; ordinals $649M; hyperlane $492M; just $371M. These are candidates for Phase 5, not verdicts.</td></tr>
+        <tr><td>Phase 3's candidates</td><td>wojak-5 and novachargex: flagged. celer-network: z-score + IF. <b>beldex: none.</b> Its volume z of 10.4 is below the 12.3 needed for the top 1%.</td></tr>
+        <tr><td>On-chain (236 token-days, illustrative only)</td><td>Methods agree more (0.5–0.6). All three flag LOOKS on 17 Sep (wallet round-trip share 7.7%, rt_share z = 52, but on only 26 transfers), LINK on 31 Aug (activity per address z = 8.6, the "recycled activity" day from Phase 3), PEPE on 27 Jul (z = 13.5), and large-transfer days for PEPE and LOOKS.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="why"><strong>The design decision this supports:</strong> don't pick one method. Use <b>the z-score</b> for interpretable single-feature alerts, <b>LOF</b> for combination anomalies the others can't see, and agreement between methods as a stronger signal. Isolation Forest adds little beyond the z-score here, a finding that only came from comparing them on real data.</p>
+
+    <h3>Bugs, corrections and what they taught us</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix / correction</th></tr></thead>
+      <tbody>
+        <tr><td>Correction 1 (Phase 2 gap)</td><td><b>Volume feed glitches.</b> Bitcoin and Ethereum were on the "wash trading" list with <i>negative</i> volume z. Bitcoin: $30–46B on surrounding days, <b>$0.38B on 12 March</b>, with a smooth price. Ethereum: same on 15 March. 2,986 days across 245 coins had volume below 5% of their recent median. Phase 2's cleaning only checked prices.</td><td><code>volume_glitch</code> flag: volume below 5% of <i>both</i> neighbouring days, i.e. an isolated collapse that snaps back. Dropped from the clean view (921 days, 179 coins). Deliberately asymmetric: one-day spikes stay, because a spike can be a real event or wash trading.</td></tr>
+        <tr><td>Correction 2</td><td><b>Robust z-scores still exploded</b> (max 74,309) on stablecoins (dola-usd, hex-trust-usdx). Median/MAD protects against one outlier in the window, not against a near-constant series: any tiny wiggle divided by a near-zero MAD is "extreme".</td><td>A floor on the scale: 0.5% for returns, 10% for volume and turnover. A 3σ flag then needs at least a ~1.5% price move or ~30% volume change. Max robust |z| now 501.</td></tr>
+        <tr><td>Bug 7</td><td>The wash-trading list used |volume z|, so it included volume <i>collapses</i>. Wash trading inflates volume.</td><td>The list requires a positive volume spike.</td></tr>
+        <tr><td>Correction 3</td><td><b>LOF flagged ordinary days.</b> Its top unique catch was a tokenized treasury bond with every feature at 0.0. LOF assumes no duplicate points: hundreds of identical "flat days" make the k-distance 0, density infinite, and points next to the pile get absurd scores. A sanity metric showed <b>15% of LOF's flags had no feature above |z| = 1</b>.</td><td>Collapse identical points before fitting. Rounding at 0.001σ left 15%, at 0.01σ 10%, at <b>0.1σ: 0.1%</b>, with LOF staying just as distinct from the z-score. Trade-off: LOF can't see structure finer than 0.1σ, so its unit test was restated in z-score units and the limit is documented.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="why"><strong>Lesson:</strong> summary numbers like overlap tables looked fine on the first run. Every one of these problems was found by <b>reading the actual rows</b> each method flagged.</p>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>How do you compare detectors without labels?</b> At an equal alert budget. Then overlap, consensus, and a breakdown by anomaly type of what each one catches.</li>
+      <li><b>Which method won?</b> None alone. The z-score and Isolation Forest mostly agree (0.73) on this fat-tailed data; LOF sees different, local, multivariate anomalies (24% of its flags). Agreement across methods is the strongest signal.</li>
+      <li><b>Why robust z-scores, and why the floor?</b> Mean and std get dragged by single extremes (z = 201). Median and MAD don't, but they still blow up on near-constant series (z = 74,309), so the scale has a minimum.</li>
+      <li><b>What would you have shipped wrongly without checking?</b> Bitcoin as a wash-trading suspect (a volume feed glitch), and LOF alerts on a treasury bond's ordinary days (the duplicate-point artifact).</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Next session</span>
-    <h2 id="next">Phase 4: model comparison</h2>
+    <h2 id="next">Phase 5: evaluation</h2>
     <ul class="tight">
-      <li>Three detectors on the same features: a rolling z-score baseline (also tried in a robust median/MAD version, after the z = 201 finding), Isolation Forest, and Local Outlier Factor.</li>
-      <li>Thresholds calibrated to the data's fat tails, not textbook values.</li>
-      <li>Compare where they agree and disagree, and what each one catches that the others miss, including the wash-trading-shaped candidates found here.</li>
+      <li><b>Synthetic injection:</b> plant known anomalies (price spikes, volume-only spikes, combination anomalies) into copies of real coin histories, re-run all three methods, and measure precision and recall per method and per anomaly type.</li>
+      <li><b>Backtest against real, documented events:</b> check whether the methods flag 2–3 independently documented market events in our window.</li>
+      <li>Check the wash-trading candidates (celer-network, pyth-network, hyperlane and others) against outside information.</li>
+      <li>Report failures as plainly as successes.</li>
     </ul>
   </section>
 
