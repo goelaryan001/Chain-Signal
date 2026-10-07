@@ -12,8 +12,8 @@ Full design: [chainsignal_design_and_build_plan.md](chainsignal_design_and_build
 | 1 | Real data ingestion (CoinGecko, Etherscan) | done |
 | 2 | ClickHouse schema + load | done |
 | 3 | PySpark feature engineering | done |
-| 4 | Model comparison | next |
-| 5 | Evaluation | |
+| 4 | Model comparison | done |
+| 5 | Evaluation | next |
 | 6 | Insights, tests, final README | |
 
 ## Setup
@@ -40,6 +40,9 @@ python3.11 -m venv .venv
 .venv/bin/python scripts/label_addresses.py
 .venv/bin/python scripts/load_clickhouse.py
 .venv/bin/python scripts/build_features.py      # ClickHouse -> Parquet -> Spark -> ClickHouse, verified
+
+# Phase 4: robust z-score / Isolation Forest / LOF at an equal 1% alert budget, compared
+.venv/bin/python scripts/run_models.py          # ~30 s; writes anomaly_scores
 ```
 
 ## ClickHouse tables
@@ -55,6 +58,7 @@ python3.11 -m venv .venv
 | `market_daily_clean` | the modelling input: `ok` coins only |
 | `address_labels` | contract vs wallet for the 13,204 addresses in back-and-forth pairs |
 | `market_features` | per coin per day: trailing 30-day return / volume / turnover z-scores, market correlation and beta, residual z, volume-price gap |
+| `anomaly_scores` | per coin-day and token-day: score and flag from each of the 3 detectors, and votes |
 | `onchain_features` | per token per day: activity, participants, new addresses, concentration, large transfers, wallet-to-wallet round trips, trailing 14-day z-scores |
 
 Schema and design notes: [src/chainsignal/db/schema.sql](src/chainsignal/db/schema.sql), [quality.sql](src/chainsignal/db/quality.sql).
@@ -68,7 +72,7 @@ src/chainsignal/
   db/              ClickHouse client, schema/rollup/quality SQL, loader
   ingest/          CoinGecko + Etherscan pulls, address labels
   features/        PySpark market + on-chain features, Parquet IO
-  models/          z-score, Isolation Forest, LOF     (Phase 4)
+  models/          robust z, Isolation Forest, LOF; comparison helpers
   evaluation/      synthetic injection, backtests     (Phase 5)
 scripts/           runnable entry points
 tests/             pytest
