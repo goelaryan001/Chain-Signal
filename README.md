@@ -13,8 +13,8 @@ Full design: [chainsignal_design_and_build_plan.md](chainsignal_design_and_build
 | 2 | ClickHouse schema + load | done |
 | 3 | PySpark feature engineering | done |
 | 4 | Model comparison | done |
-| 5 | Evaluation | next |
-| 6 | Insights, tests, final README | |
+| 5 | Evaluation | done |
+| 6 | Insights, tests, final README | next |
 
 ## Setup
 
@@ -43,6 +43,9 @@ python3.11 -m venv .venv
 
 # Phase 4: robust z-score / Isolation Forest / LOF at an equal 1% alert budget, compared
 .venv/bin/python scripts/run_models.py          # ~30 s; writes anomaly_scores
+
+# Phase 5: synthetic injection at 4 strengths + backtest vs documented events (~5 min)
+.venv/bin/python scripts/evaluate.py            # writes docs/results/phase5_*.csv
 ```
 
 ## ClickHouse tables
@@ -73,7 +76,7 @@ src/chainsignal/
   ingest/          CoinGecko + Etherscan pulls, address labels
   features/        PySpark market + on-chain features, Parquet IO
   models/          robust z, Isolation Forest, LOF; comparison helpers
-  evaluation/      synthetic injection, backtests     (Phase 5)
+  evaluation/      synthetic injection, backtest vs documented events
 scripts/           runnable entry points
 tests/             pytest
 ```

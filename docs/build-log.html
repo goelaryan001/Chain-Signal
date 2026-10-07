@@ -101,8 +101,8 @@ footer { font-size: 0.85rem; color: var(--muted); }
       <li class="is-done"><span class="n">Phase 2</span><span class="t">ClickHouse schema + load</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 3</span><span class="t">PySpark features</span><span class="pill done">done</span></li>
       <li class="is-done"><span class="n">Phase 4</span><span class="t">Model comparison</span><span class="pill done">done</span></li>
-      <li><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill next">next</span></li>
-      <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill later">later</span></li>
+      <li class="is-done"><span class="n">Phase 5</span><span class="t">Evaluation</span><span class="pill done">done</span></li>
+      <li><span class="n">Phase 6</span><span class="t">Insights, tests, README</span><span class="pill next">next</span></li>
     </ol>
   </section>
 
@@ -270,6 +270,7 @@ tests/test_environment.py</code></pre>
         <h3>Wrote the CoinGecko client</h3>
         <p><code>ingest/coingecko.py</code>: 4 calls to <code>/coins/markets</code> fetch the top 1,000 coins by market cap (250 per page). Then one <code>/coins/{id}/market_chart</code> call per coin returns 365 days of price, market cap and volume. Each response is written to <code>data/raw/coingecko/market_chart/&lt;coin&gt;.json</code>, and coins already on disk are skipped. A crash halfway costs nothing.</p>
         <p class="why"><strong>A subtle detail:</strong> CoinGecko's daily series has one point at 00:00 UTC per day, plus one extra point for "right now" in the middle of today. That last point is an incomplete day, so the parser keeps only exact-midnight points. Otherwise today would look like a day with strangely low volume.</p>
+        <p class="why"><strong>Correction found later (Phase 5, Bug 9):</strong> the midnight point stamped day D holds the close and 24-hour volume of day <b>D−1</b>, but this parser labelled it D. Every market date was one day late until Phase 5, when Celer's volume spike was compared with CoinRanking. Now fixed.</p>
       </div></li>
 
       <li><div class="body">
@@ -505,6 +506,7 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <div class="stamp"><span>branch <b>phase-3-features</b></span><span>commits <b>3af903a</b> → <b>5b0fa42</b></span><span>tests <b>33 passing</b></span><span>pipeline checks <b>5/5</b></span><span>bugs fixed <b>2</b></span></div>
     </div>
     <p>Goal: turn the cleaned data into features that describe "normal" for each coin and token, so that Phase 4's models can recognise departures from it. Carrying the warning from Phase 2: round-trip trading must be measured between <b>ordinary wallets only</b>, with pools, routers and bots separated out first.</p>
+    <p class="why"><strong>Note added in Phase 5:</strong> market dates quoted in this entry are one day late (Bug 9, fixed in Phase 5). For example, Celer's volume spike was 3 June, not 4 June, and Bitcoin's volume glitch was 11 March, not 12 March. The statistics are unaffected.</p>
 
     <ol class="steps">
       <li><div class="body">
@@ -621,6 +623,7 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
       <div class="stamp"><span>branch <b>phase-4-models</b></span><span>commit <b>e83e69c</b></span><span>tests <b>43 passing</b></span><span>bugs / corrections <b>4</b></span></div>
     </div>
     <p>Goal: run the three candidate detectors on the same features and compare them deliberately. Where do they agree, where do they disagree, and what kind of anomaly does each one catch? There are no labels, so the comparison has to be designed carefully, and the first runs turned out to be as much a test of the data and the methods as of the anomalies.</p>
+    <p class="why"><strong>Note added in Phase 5:</strong> market dates quoted in this entry are one day late (Bug 9, fixed in Phase 5). For example, Celer's volume spike was 3 June, not 4 June, and Bitcoin's volume glitch was 11 March, not 12 March. The statistics are unaffected.</p>
 
     <ol class="steps">
       <li><div class="body">
@@ -717,14 +720,117 @@ got:   fewer than 1,000 records  →  reached the end, write all, done</code></p
     </ul>
   </article>
 
+  <article class="entry" id="phase-5">
+    <div class="entry-head">
+      <span class="eyebrow">Phase 5 · 6 Oct 2026</span>
+      <h2>Evaluation: planted anomalies and real events</h2>
+      <div class="stamp"><span>branch <b>phase-5-evaluation</b></span><span>commits <b>e59aa06</b> → <b>cd4057b</b></span><span>tests <b>48 passing</b></span><span>bugs / corrections <b>3</b></span></div>
+    </div>
+    <p>Goal: there's no ground truth for crypto anomalies, so we combine the two techniques from the design doc. <b>Synthetic injection</b> plants anomalies we created ourselves, so we know the answer exactly. <b>Backtesting</b> checks the methods against real, independently documented events. Then we report the failures as plainly as the successes.</p>
+
+    <ol class="steps">
+      <li><div class="body">
+        <h3>Made evaluation score data exactly like production</h3>
+        <p>The Phase 4 scoring steps moved into a shared <code>models/pipeline.py</code>, used by both the model run and the evaluation, so there's no second copy that could drift. The refactor was checked by re-running Phase 4: identical results (460 / 2,252 / 2,671).</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Synthetic injection design</h3>
+        <ul class="tight">
+          <li><b>Planted in the raw data</b> (returns, volume, market cap), before the robust features are computed, so each anomaly goes through the real feature code.</li>
+          <li><b>One per coin</b> (887 sites), at a random day with 40+ days of history, so no two injections share a trailing window.</li>
+          <li><b>Three types:</b> a price spike; a volume spike with the price unchanged (the wash-trading shape); and a <b>combo</b>, a price move on <i>falling</i> volume at half strength each, so neither feature is extreme alone.</li>
+          <li><b>Strength in each coin's own units:</b> 3, 6, 12 and 24 times its trailing robust σ, so "6σ" means the same for a stablecoin and a memecoin.</li>
+          <li><b>Metrics:</b> recall at the 1% alert budget, and precision@k, which is a <i>lower bound</i> because real unlabelled anomalies in the data count as misses.</li>
+        </ul>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Injection results: recall at the 1% budget</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Strength</th><th>Type</th><th>z-score</th><th>Isolation Forest</th><th>LOF</th><th>2+ agree</th></tr></thead>
+          <tbody>
+            <tr><td>3σ</td><td>all</td><td>1.5%</td><td>1.7%</td><td>3.2%</td><td>1.4%</td></tr>
+            <tr><td>6σ</td><td>all</td><td>4.7%</td><td>3.9%</td><td>5.9%</td><td>3.5%</td></tr>
+            <tr><td>12σ</td><td>price spike</td><td>51%</td><td>56%</td><td>7%</td><td>50%</td></tr>
+            <tr><td>12σ</td><td>volume spike</td><td>41%</td><td>25%</td><td>6%</td><td>24%</td></tr>
+            <tr><td>12σ</td><td><b>combo</b></td><td><b>11%</b></td><td><b>43%</b></td><td>13%</td><td>13%</td></tr>
+            <tr><td>24σ</td><td>price spike</td><td>100%</td><td>99.7%</td><td>11%</td><td>99.7%</td></tr>
+            <tr><td>24σ</td><td>volume spike</td><td>100%</td><td>97.6%</td><td>22%</td><td>99.7%</td></tr>
+            <tr><td>24σ</td><td><b>combo</b></td><td><b>54%</b></td><td><b>98.6%</b></td><td>19%</td><td>57%</td></tr>
+          </tbody>
+        </table></div>
+        <p>Precision@k (lower bound) at 24σ: z-score 28%, Isolation Forest 36%, LOF 9%. Full results: <code>docs/results/phase5_injection.csv</code>.</p>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Backtest against real, documented events</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Event</th><th>What our data shows</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td><b>Resolv USR depeg</b>, 22 Mar 2026 (~80M unbacked USR minted)</td><td>USR −69.1% on <b>exactly 22 March</b>, volume $9.7M vs ~$100k normally</td><td>✅ flagged by <b>all three</b> (robust z 234.6)</td></tr>
+            <tr><td><b>Kelp DAO hack</b>, 19 Apr 2026 (~$293M drained)</td><td>rsETH −7.5% and −10%, like ETH; volume $12.6M on 18 Apr (550x the day before), but its volume is erratic (robust z only 3.6)</td><td>❌ <b>missed</b> by all three. rsETH's price held close to ETH, and an exploit that drains a protocol without breaking its token's price is invisible to price/volume detectors.</td></tr>
+            <tr><td><b>Maya Protocol CACAO</b>, 18 Aug 2026 (token −88.7%)</td><td>CoinGecko's history <b>ends 18 July</b>, a month before</td><td>⚪ <b>no data</b>. Not counted as a miss.</td></tr>
+            <tr><td>Balance Coin BLC, 22 Jul 2026</td><td>not listed on CoinGecko</td><td>⚪ no data</td></tr>
+            <tr><td><b>February 2026 crash</b> (record liquidations; BTC ~−24%)</td><td>Median coin −12.4% on 5 Feb; BTC rz −7.9</td><td>Per-coin detectors <b>barely react</b> (z-score flags 1.1% of coins, about a normal day), by design: they look for coin-specific anomalies, and every coin fell together. LOF flagged 7.5% (12x its normal rate). <b>The market-return series itself scores −9.8.</b></td></tr>
+            <tr><td><i>Discovered:</i> <b>21 Aug 2026 rally</b></td><td>The largest market-level move of the year (z +12.3; median coin +6.1%, XRP +14.7%), found by our data, not looked up first</td><td>✅ Confirmed afterwards: BTC +23% on the week, $1.48B in short liquidations, Treasury buybacks and the CLARITY Act summit.</td></tr>
+          </tbody>
+        </table></div>
+      </div></li>
+
+      <li><div class="body">
+        <h3>Checked the top wash-trading candidate against an outside source</h3>
+        <p><b>Celer Network, 3 June 2026:</b> CoinGecko says $1.49B of volume on a coin with an <b>$18M market cap</b> (82x its whole value in one day), with the price flat, then $487M, then back to ~$2M. <b>CoinRanking independently shows the same:</b> $1.5B, then $513M. So it isn't one aggregator's glitch; the volume really was reported by exchanges. $1.5B traded with no price impact can't be genuine trading in an $18M coin. It's <b>consistent with wash trading or fake exchange-reported volume</b>, which is the pattern this project set out to find. The other candidates (pyth-network, ordinals, hyperlane, just) were not checked externally; pyth-network's late-August spike also coincided with the market-wide rally.</p>
+      </div></li>
+    </ol>
+
+    <h3>What the evaluation says, plainly</h3>
+    <ul class="tight">
+      <li><b>Detection needs about 12σ at a 1% budget.</b> Below 6σ, every method catches only a few percent of planted anomalies. Crypto's own fat-tailed anomalies fill the budget first. A lower alert budget won't fix that; a larger one costs more false alarms.</li>
+      <li><b>The design doc's claim about Isolation Forest holds where it matters:</b> on combination anomalies (a move on falling volume), IF recalls 43% vs the z-score's 11% at 12σ, and 99% vs 54% at 24σ. Phase 4 saw IF mirror the z-score on <i>real</i> data. Both are true: IF's advantage is specific to anomalies spread across features.</li>
+      <li><b>LOF is weak at catching big spikes:</b> only 17% recall even at 24σ. A spike lands in the sparse tail next to other real extremes, so it looks locally normal. LOF's value is the local, multivariate anomalies of Phase 4, not this kind of spike.</li>
+      <li><b>Consensus (2+ methods) is the safest single rule:</b> 85% recall at 24σ overall, with the z-score's interpretability.</li>
+      <li><b>Some real events are invisible to market data:</b> the Kelp hack moved rsETH no more than ETH. On-chain features (flows out of the protocol) would be needed.</li>
+      <li><b>Market-wide and coin-specific anomalies need different detectors.</b> The market-return series caught the February crash and found the August rally on its own.</li>
+    </ul>
+
+    <h3>Bugs, corrections and what they taught us</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>What happened</th><th>Fix / correction</th></tr></thead>
+      <tbody>
+        <tr><td>Bug 9 (from Phase 1)</td><td><b>Every market date was one day late.</b> CoinRanking dates Celer's spike 3 June, ours said 4 June, and the prices confirmed a consistent one-day shift. CoinGecko's point stamped 00:00 UTC on day D holds day D−1's close and volume.</td><td>The parser labels rows D−1. Load, features and models rebuilt and re-verified. The fix showed up straight away: USR's depeg now lands on exactly the documented date. <code>e59aa06</code></td></tr>
+        <tr><td>Correction (Phase 1 design)</td><td><b>Survivorship bias.</b> None of the documented exploit coins were in our data. Choosing "the top 1000 by market cap <i>today</i>" removes coins that collapsed during the year, which are the events we want to detect. USR is now ranked #3,469.</td><td>Event coins fetched separately and appended for the backtest. The universe limitation is documented; a fix would be to select coins by market cap at the <i>start</i> of the window.</td></tr>
+        <tr><td>Bug 10</td><td>The backtest printed "flagged by none" for CACAO, which has <b>no data</b> after 18 July. That would have scored a data gap as a detector miss.</td><td>"No data" is reported separately and stored as missing in the results CSV. <code>cd4057b</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Commits</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Commit</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td>e59aa06</td><td>Bug 9: date labelling fix and full rebuild</td></tr>
+        <tr><td>cd4057b</td><td>Shared scoring pipeline, injection, backtest, results CSVs, Bug 10 fix, 5 tests</td></tr>
+        <tr><td>next</td><td>This build log entry</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Explain it out loud</h3>
+    <ul class="tight">
+      <li><b>How do you evaluate an anomaly detector without labels?</b> Plant anomalies you control and measure recall and precision, then backtest against independently documented events. Report both, including the misses.</li>
+      <li><b>Which method is best?</b> Depends on the anomaly. Single-feature spikes: z-score (interpretable, ~equal to IF). Combinations: Isolation Forest (43% vs 11%). Local oddities: LOF. Consensus is the best default.</li>
+      <li><b>What did it miss, and why?</b> The Kelp hack: the token's price held, so price/volume features can't see it. CACAO: no data. Small anomalies below ~12σ: crypto's own fat tails fill the alert budget.</li>
+      <li><b>What would you change?</b> Select the universe by market cap at the start of the window (survivorship), add a market-level detector next to the per-coin ones, and use on-chain protocol flows for exploits.</li>
+    </ul>
+  </article>
+
   <section class="next-box" aria-labelledby="next">
     <span class="eyebrow">Next session</span>
-    <h2 id="next">Phase 5: evaluation</h2>
+    <h2 id="next">Phase 6: insights, tests, final README</h2>
     <ul class="tight">
-      <li><b>Synthetic injection:</b> plant known anomalies (price spikes, volume-only spikes, combination anomalies) into copies of real coin histories, re-run all three methods, and measure precision and recall per method and per anomaly type.</li>
-      <li><b>Backtest against real, documented events:</b> check whether the methods flag 2–3 independently documented market events in our window.</li>
-      <li>Check the wash-trading candidates (celer-network, pyth-network, hyperlane and others) against outside information.</li>
-      <li>Report failures as plainly as successes.</li>
+      <li>Pull together what the data actually said about crypto anomalies and on-chain activity.</li>
+      <li>Fill any gaps in the tests.</li>
+      <li>Write the final README so it holds up for an interviewer: architecture, why ClickHouse, the three-way comparison, the evaluation method, and the known limitations.</li>
+      <li>Merge the phase branches into <code>main</code>.</li>
     </ul>
   </section>
 
