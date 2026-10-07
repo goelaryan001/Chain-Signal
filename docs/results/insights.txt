@@ -1,0 +1,53 @@
+## Data
+market: 1,000 coins, 319,158 daily rows, 2025-10-06 -> 2026-10-05
+on-chain LINK : 1,012,936 transfers, 180,074 addresses, 2026-07-08 -> 2026-10-06
+on-chain LOOKS: 3,856 transfers, 1,132 addresses, 2026-07-09 -> 2026-10-06
+on-chain PEPE : 622,132 transfers, 168,172 addresses, 2026-07-08 -> 2026-10-06
+
+## Data quality
+coin_quality feed_glitch    28 coins
+coin_quality ok            917 coins
+coin_quality stale_feed     55 coins
+isolated one-day volume collapses removed: 921 days across 179 coins
+
+## Fat tails
+days with |return z| > 3: 2.79% (a normal distribution gives 0.27%: 10x)
+robust |z| needed to reach the top 1% of coin-days: 12.3
+
+## Impossible turnover (volume many times market cap, price flat)
+median daily turnover: 5.4% of market cap
+low-volatility (pegged) assets identified from prices: 101 (excluded below: flat by design)
+  volume >  1x market cap, |price move| < 5%: 2,424 coin-days, 259 coins
+  volume >  5x market cap, |price move| < 5%: 137 coin-days, 50 coins
+  volume > 10x market cap, |price move| < 5%: 29 coin-days, 13 coins
+  most frequent (excluding pegged assets):
+    spark-2                           23 days, peak 374x market cap
+    kiichain                          16 days, peak 10x market cap
+    enso                               8 days, peak 11x market cap
+    alphabet-bstocks-tokenized-stock   7 days, peak 8x market cap
+    spdr-s-p-500-etf-trust-robinhood-tokenized-stock   7 days, peak 9x market cap
+
+## On-chain
+LINK  back-and-forth pairs 11,766: 9,739 involve a contract, carrying 96% of their transfers
+LOOKS back-and-forth pairs 97: 88 involve a contract, carrying 98% of their transfers
+PEPE  back-and-forth pairs 6,032: 5,526 involve a contract, carrying 96% of their transfers
+LINK  wallet-to-wallet round trips: 1.10% of transfers on average; median 10,236 transfers/day
+LOOKS wallet-to-wallet round trips: 0.22% of transfers on average; median 28 transfers/day
+PEPE  wallet-to-wallet round trips: 1.28% of transfers on average; median 5,536 transfers/day
+PEPE transfers via transfer         32.9%
+PEPE transfers via (none)           27.3%
+PEPE transfers via handleOps        13.8%
+PEPE transfers via atInversebrah    8.8%
+
+## Models (Phase 4) and evaluation (Phase 5)
+Jaccard zscore vs iforest: 0.73
+Jaccard zscore vs lof: 0.11
+Jaccard iforest vs lof: 0.11
+coin-days flagged by all 3: 460, by 2+: 2,252
+injection  3 sigma recall  all: z 1% IF 2% LOF 3%   combo: z 3% IF 3% LOF 4%
+injection  6 sigma recall  all: z 5% IF 4% LOF 6%   combo: z 3% IF 3% LOF 7%
+injection 12 sigma recall  all: z 34% IF 41% LOF 9%   combo: z 11% IF 43% LOF 13%
+injection 24 sigma recall  all: z 85% IF 99% LOF 17%   combo: z 54% IF 99% LOF 19%
+backtest resolv-usr 2026-03-22              zscore, iforest, lof
+backtest kelp-dao-restaked-eth 2026-04-19   missed
+backtest cacao 2026-08-18                   no data
